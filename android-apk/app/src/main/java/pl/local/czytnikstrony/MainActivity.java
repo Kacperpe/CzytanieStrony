@@ -163,27 +163,27 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void initColors() {
         if (isDarkMode()) {
-            C_BG          = 0xFF080F0D;
-            C_SURFACE     = 0xFF111A18;
-            C_SURFACE2    = 0xFF182624;
-            C_PRIMARY     = 0xFF4DD8B5;
-            C_PRIMARY_DIM = 0xFF0F2924;
-            C_ON_PRIMARY  = 0xFF001812;
-            C_TEXT        = 0xFFE8F4F1;
-            C_MUTED       = 0xFF78A49F;
-            C_BORDER      = 0xFF243735;
+            C_BG          = 0xFF0C0D14;
+            C_SURFACE     = 0xFF13152A;
+            C_SURFACE2    = 0xFF1C1E38;
+            C_PRIMARY     = 0xFF7B6CF6;
+            C_PRIMARY_DIM = 0xFF1A1940;
+            C_ON_PRIMARY  = 0xFFFFFFFF;
+            C_TEXT        = 0xFFE8E9FF;
+            C_MUTED       = 0xFF8B8AC0;
+            C_BORDER      = 0xFF2A2C4A;
             C_DANGER      = 0xFFFF6B6B;
             C_DANGER_BG   = 0xFF2C1515;
         } else {
-            C_BG          = 0xFFF4F9F7;
+            C_BG          = 0xFFF3F2FF;
             C_SURFACE     = 0xFFFFFFFF;
-            C_SURFACE2    = 0xFFEDF5F2;
-            C_PRIMARY     = 0xFF1B6F5E;
-            C_PRIMARY_DIM = 0xFFE3F2EE;
+            C_SURFACE2    = 0xFFEEEDFF;
+            C_PRIMARY     = 0xFF5B4AE8;
+            C_PRIMARY_DIM = 0xFFECEBFF;
             C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFF0D1F1C;
-            C_MUTED       = 0xFF527069;
-            C_BORDER      = 0xFFC8D9D5;
+            C_TEXT        = 0xFF1A1535;
+            C_MUTED       = 0xFF6B6898;
+            C_BORDER      = 0xFFD0CEEE;
             C_DANGER      = 0xFFC0392B;
             C_DANGER_BG   = 0xFFFFF0EE;
         }
@@ -1026,7 +1026,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         int start = Math.max(0, Math.min(currentChunkStarts.get(currentChunkIndex), e.length()));
         int end   = Math.max(start, Math.min(currentChunkEnds.get(currentChunkIndex), e.length()));
         if (end <= start) return;
-        int bg = isDarkMode() ? 0xAA4DD8B5 : 0x551B6F5E;
+        int bg = isDarkMode() ? 0xAA7B6CF6 : 0x555B4AE8;
         currentChunkSpan = new BackgroundColorSpan(bg);
         e.setSpan(currentChunkSpan, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         textInput.setSelection(end);

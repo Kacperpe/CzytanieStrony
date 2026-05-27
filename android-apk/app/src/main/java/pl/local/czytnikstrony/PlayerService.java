@@ -152,7 +152,7 @@ public class PlayerService extends Service {
             .setVisibility(Notification.VISIBILITY_PUBLIC);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder.setColor(0xFF1B7058).setColorized(true);
+            builder.setColor(0xFF5B4AE8).setColorized(true);
         }
 
         return builder.build();
@@ -164,7 +164,7 @@ public class PlayerService extends Service {
         Canvas canvas = new Canvas(bmp);
 
         Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bg.setColor(0xFF1B7058);
+        bg.setColor(0xFF5B4AE8);
         canvas.drawRoundRect(new RectF(0, 0, size, size), 28, 28, bg);
 
         Paint wave = new Paint(Paint.ANTI_ALIAS_FLAG);
