@@ -8,8 +8,10 @@ import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.Window;
 import android.view.WindowManager;
@@ -21,11 +23,14 @@ import java.util.Locale;
 
 public class FloatingReaderActivity extends Activity implements TextToSpeech.OnInitListener {
 
-    private int C_SURFACE, C_PRIMARY, C_ON_PRIMARY, C_TEXT, C_MUTED, C_BORDER, C_SURFACE2;
+    private int C_SURFACE, C_SURFACE2, C_PRIMARY, C_PRIMARY_DIM, C_ON_PRIMARY;
+    private int C_TEXT, C_MUTED, C_BORDER, C_DANGER, C_DANGER_BG;
 
     private TextView statusText;
+    private TextView clipPreview;
     private TextToSpeech tts;
     private boolean ttsReady = false;
+    private float speechRate = 0.95f;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -34,6 +39,12 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         configureWindow();
         buildUi();
         tts = new TextToSpeech(this, this);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshClipPreview();
     }
 
     @Override
@@ -47,15 +58,15 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         ttsReady = (status == TextToSpeech.SUCCESS);
         if (ttsReady) {
             tts.setLanguage(new Locale("pl", "PL"));
-            tts.setSpeechRate(0.95f);
-            setStatus("Gotowy — skopiuj tekst lub adres i kliknij Czytaj.");
+            applySpeechRate();
+            setStatus("Gotowy.");
         } else {
-            setStatus("TTS niedostępny na tym urządzeniu.");
+            setStatus("TTS niedostępny.");
         }
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Kolory
+    //  Kolory — spójne z MainActivity (indigo/fiolet)
     // ════════════════════════════════════════════════════════════════════════
 
     private boolean isDarkMode() {
@@ -65,21 +76,27 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
 
     private void initColors() {
         if (isDarkMode()) {
-            C_SURFACE    = 0xFF1A2826;
-            C_SURFACE2   = 0xFF1F2D2A;
-            C_PRIMARY    = 0xFF3ECBA8;
-            C_ON_PRIMARY = 0xFF001A14;
-            C_TEXT       = 0xFFDCEDE9;
-            C_MUTED      = 0xFF7CA99F;
-            C_BORDER     = 0xFF2B3E3B;
+            C_SURFACE     = 0xFF13152A;
+            C_SURFACE2    = 0xFF1C1E38;
+            C_PRIMARY     = 0xFF7B6CF6;
+            C_PRIMARY_DIM = 0xFF1A1940;
+            C_ON_PRIMARY  = 0xFFFFFFFF;
+            C_TEXT        = 0xFFE8E9FF;
+            C_MUTED       = 0xFF8B8AC0;
+            C_BORDER      = 0xFF2A2C4A;
+            C_DANGER      = 0xFFFF6B6B;
+            C_DANGER_BG   = 0xFF2C1515;
         } else {
-            C_SURFACE    = 0xFFFFFFFF;
-            C_SURFACE2   = 0xFFF7FBFA;
-            C_PRIMARY    = 0xFF1A6B5A;
-            C_ON_PRIMARY = 0xFFFFFFFF;
-            C_TEXT       = 0xFF182624;
-            C_MUTED      = 0xFF58726E;
-            C_BORDER     = 0xFFCBDAD8;
+            C_SURFACE     = 0xFFFFFFFF;
+            C_SURFACE2    = 0xFFEEEDFF;
+            C_PRIMARY     = 0xFF5B4AE8;
+            C_PRIMARY_DIM = 0xFFECEBFF;
+            C_ON_PRIMARY  = 0xFFFFFFFF;
+            C_TEXT        = 0xFF1A1535;
+            C_MUTED       = 0xFF6B6898;
+            C_BORDER      = 0xFFD0CEEE;
+            C_DANGER      = 0xFFC0392B;
+            C_DANGER_BG   = 0xFFFFF0EE;
         }
     }
 
@@ -91,7 +108,7 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         Window window = getWindow();
         WindowManager.LayoutParams params = window.getAttributes();
         params.gravity = Gravity.TOP | Gravity.END;
-        params.width   = dp(300);
+        params.width   = dp(330);
         params.height  = WindowManager.LayoutParams.WRAP_CONTENT;
         params.x       = dp(10);
         params.y       = dp(72);
@@ -105,45 +122,140 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
     private void buildUi() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(16));
-        root.setBackground(mkRound(C_SURFACE, C_BORDER, 18));
+        root.setPadding(dp(14), dp(14), dp(14), dp(14));
+        root.setBackground(mkRound(C_SURFACE, C_BORDER, 20));
 
-        // Tytuł
-        TextView title = new TextView(this);
-        title.setText("Szybki czytnik");
-        title.setTextColor(C_TEXT);
-        title.setTextSize(18);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
+        // ── Nagłówek (tytuł + [✕]) ─────────────────────────────────────────
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
 
-        // Status
+        TextView dot = new TextView(this);
+        dot.setText("●");
+        dot.setTextColor(C_PRIMARY);
+        dot.setTextSize(9);
+        dot.setPadding(0, 0, dp(7), 0);
+        header.addView(dot);
+
+        TextView titleTv = new TextView(this);
+        titleTv.setText("Czytnik strony");
+        titleTv.setTextColor(C_TEXT);
+        titleTv.setTextSize(15);
+        titleTv.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        header.addView(titleTv, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        Button closeX = new Button(this);
+        closeX.setText("✕");
+        closeX.setTextSize(14);
+        closeX.setAllCaps(false);
+        closeX.setTextColor(C_MUTED);
+        closeX.setBackground(null);
+        closeX.setMinHeight(0);
+        closeX.setMinimumHeight(0);
+        closeX.setPadding(dp(8), 0, 0, 0);
+        closeX.setOnClickListener(v -> finish());
+        header.addView(closeX);
+
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
+        hlp.setMargins(0, 0, 0, dp(4));
+        root.addView(header, hlp);
+
+        // ── Status ─────────────────────────────────────────────────────────
         statusText = new TextView(this);
         statusText.setText("Startuje…");
         statusText.setTextColor(C_MUTED);
-        statusText.setTextSize(13);
-        statusText.setPadding(0, dp(4), 0, dp(12));
-        root.addView(statusText);
+        statusText.setTextSize(11);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(-1, -2);
+        slp.setMargins(0, 0, 0, dp(10));
+        root.addView(statusText, slp);
 
-        // Przyciski
-        Button readBtn  = btn("▶  Czytaj schowek", true);
-        Button openBtn  = btn("Otwórz pełny czytnik", false);
-        Button stopBtn  = btn("⏹  Stop", false);
-        Button closeBtn = btn("Zamknij", false);
+        // ── Podgląd schowka ─────────────────────────────────────────────────
+        clipPreview = new TextView(this);
+        clipPreview.setMaxLines(2);
+        clipPreview.setEllipsize(TextUtils.TruncateAt.END);
+        clipPreview.setTextColor(C_MUTED);
+        clipPreview.setTextSize(12);
+        clipPreview.setLineSpacing(dp(2), 1f);
+        clipPreview.setPadding(dp(10), dp(8), dp(10), dp(8));
+        clipPreview.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
+        LinearLayout.LayoutParams cplp = new LinearLayout.LayoutParams(-1, -2);
+        cplp.setMargins(0, 0, 0, dp(10));
+        root.addView(clipPreview, cplp);
 
-        root.addView(readBtn,  fullWidth(dp(8)));
-        root.addView(openBtn,  fullWidth(dp(6)));
-        root.addView(stopBtn,  fullWidth(dp(6)));
-        root.addView(closeBtn, fullWidth(dp(0)));
+        // ── Wiersz 1: [▶ Czytaj] [⏹ Stop] ──────────────────────────────────
+        LinearLayout row1 = new LinearLayout(this);
+        row1.setOrientation(LinearLayout.HORIZONTAL);
 
+        Button readBtn = btnPrimary("▶  Czytaj");
+        Button stopBtn = btnDanger("⏹  Stop");
+
+        LinearLayout.LayoutParams rblp = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        LinearLayout.LayoutParams sblp = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        sblp.setMargins(dp(6), 0, 0, 0);
+        row1.addView(readBtn, rblp);
+        row1.addView(stopBtn, sblp);
+
+        LinearLayout.LayoutParams r1lp = new LinearLayout.LayoutParams(-1, -2);
+        r1lp.setMargins(0, 0, 0, dp(6));
+        root.addView(row1, r1lp);
+
+        // ── Wiersz 2: [↗ Otwórz pełny czytnik] ─────────────────────────────
+        Button openBtn = btnSecondary("↗  Otwórz pełny czytnik");
+        LinearLayout.LayoutParams oblp = new LinearLayout.LayoutParams(-1, dp(42));
+        oblp.setMargins(0, 0, 0, dp(10));
+        root.addView(openBtn, oblp);
+
+        // ── Wiersz 3: Tempo — 3 przyciski ────────────────────────────────────
+        LinearLayout rateRow = new LinearLayout(this);
+        rateRow.setOrientation(LinearLayout.HORIZONTAL);
+        rateRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView rateLabel = new TextView(this);
+        rateLabel.setText("Tempo");
+        rateLabel.setTextColor(C_MUTED);
+        rateLabel.setTextSize(11);
+        rateLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        rateLabel.setPadding(0, 0, dp(8), 0);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            rateLabel.setLetterSpacing(0.06f);
+        }
+        rateRow.addView(rateLabel);
+
+        Button slowBtn   = btnRate("Wolno");
+        Button normalBtn = btnRate("Normal");
+        Button fastBtn   = btnRate("Szybko");
+
+        LinearLayout.LayoutParams rl1 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        LinearLayout.LayoutParams rl2 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        rl2.setMargins(dp(4), 0, 0, 0);
+        LinearLayout.LayoutParams rl3 = new LinearLayout.LayoutParams(0, dp(34), 1f);
+        rl3.setMargins(dp(4), 0, 0, 0);
+
+        rateRow.addView(slowBtn,   rl1);
+        rateRow.addView(normalBtn, rl2);
+        rateRow.addView(fastBtn,   rl3);
+        root.addView(rateRow);
+
+        // ── Zdarzenia ─────────────────────────────────────────────────────────
         readBtn.setOnClickListener(v  -> readClipboard());
+        stopBtn.setOnClickListener(v  -> { if (tts != null) tts.stop(); setStatus("Zatrzymano."); });
         openBtn.setOnClickListener(v  -> openFullReader());
-        stopBtn.setOnClickListener(v  -> {
-            if (tts != null) tts.stop();
-            setStatus("Zatrzymano.");
-        });
-        closeBtn.setOnClickListener(v -> finish());
+        slowBtn.setOnClickListener(v  -> setRate(0.70f, "wolno"));
+        normalBtn.setOnClickListener(v -> setRate(0.95f, "normalne"));
+        fastBtn.setOnClickListener(v  -> setRate(1.40f, "szybko"));
 
         setContentView(root);
+    }
+
+    private void refreshClipPreview() {
+        if (clipPreview == null) return;
+        String text = getClipboardText();
+        if (text.isEmpty()) {
+            clipPreview.setText("Schowek jest pusty");
+        } else {
+            clipPreview.setText(text);
+            clipPreview.setTextColor(C_TEXT);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -154,12 +266,11 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         String text = getClipboardText();
         if (text.isEmpty()) { setStatus("Schowek jest pusty."); return; }
         if (!ttsReady)      { setStatus("TTS nie jest jeszcze gotowy."); return; }
-
         Locale locale = detectLocale(text);
         tts.setLanguage(locale);
-        tts.setSpeechRate(0.95f);
+        applySpeechRate();
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "floating");
-        setStatus("Czytam: " + locale.toLanguageTag());
+        setStatus("Czytam • " + locale.toLanguageTag());
     }
 
     private void openFullReader() {
@@ -173,6 +284,16 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         }
         startActivity(intent);
         finish();
+    }
+
+    private void setRate(float rate, String label) {
+        speechRate = rate;
+        applySpeechRate();
+        setStatus("Tempo: " + label + " (" + rate + "×)");
+    }
+
+    private void applySpeechRate() {
+        if (tts != null && ttsReady) tts.setSpeechRate(speechRate);
     }
 
     private String getClipboardText() {
@@ -192,9 +313,9 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
     }
 
     private int count(String sample, String[] markers) {
-        int score = 0;
-        for (String m : markers) if (sample.contains(m)) score++;
-        return score;
+        int c = 0;
+        for (String m : markers) if (sample.contains(m)) c++;
+        return c;
     }
 
     private void setStatus(String msg) {
@@ -202,38 +323,66 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Helpers UI
+    //  Fabryki przycisków
     // ════════════════════════════════════════════════════════════════════════
 
-    private Button btn(String text, boolean primary) {
+    private Button btnPrimary(String text) {
         Button btn = new Button(this);
         btn.setText(text);
         btn.setAllCaps(false);
-        btn.setTextSize(14);
-        btn.setTypeface(Typeface.DEFAULT_BOLD);
-        btn.setMinHeight(dp(44));
-        btn.setPadding(dp(12), 0, dp(12), 0);
-        if (primary) {
-            btn.setTextColor(C_ON_PRIMARY);
-            btn.setBackground(mkRound(C_PRIMARY, C_PRIMARY, 10));
-        } else {
-            btn.setTextColor(C_TEXT);
-            btn.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
-        }
+        btn.setTextSize(13);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTextColor(C_ON_PRIMARY);
+        btn.setBackground(mkRound(C_PRIMARY, 0, 10));
+        btn.setPadding(0, 0, 0, 0);
         return btn;
     }
 
-    private LinearLayout.LayoutParams fullWidth(int topMargin) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, topMargin, 0, 0);
-        return lp;
+    private Button btnSecondary(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextSize(13);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTextColor(C_TEXT);
+        btn.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
+        btn.setPadding(0, 0, 0, 0);
+        return btn;
     }
+
+    private Button btnDanger(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextSize(13);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTextColor(C_DANGER);
+        btn.setBackground(mkRound(C_DANGER_BG, 0, 10));
+        btn.setPadding(0, 0, 0, 0);
+        return btn;
+    }
+
+    private Button btnRate(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextSize(11);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTextColor(C_PRIMARY);
+        btn.setBackground(mkRound(isDarkMode() ? C_SURFACE2 : C_PRIMARY_DIM, C_BORDER, 8));
+        btn.setPadding(0, 0, 0, 0);
+        return btn;
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Helpers
+    // ════════════════════════════════════════════════════════════════════════
 
     private GradientDrawable mkRound(int fill, int stroke, int radiusDp) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(fill);
         d.setCornerRadius(dp(radiusDp));
-        d.setStroke(dp(1), stroke);
+        if (stroke != 0) d.setStroke(dp(1), stroke);
         return d;
     }
 
