@@ -78,6 +78,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     // ── Stan TTS ─────────────────────────────────────────────────────────────
     private TextToSpeech         tts;
+    private final List<Voice>    allVoices   = new ArrayList<>();
     private final List<Voice>    voices      = new ArrayList<>();
     private final List<String>   voiceLabels = new ArrayList<>();
     private String  selectedLanguageCode = "auto";
@@ -122,7 +123,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(controlReceiver, filter, RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(controlReceiver, filter);
+            registerReceiver(controlReceiver, filter, PlayerService.INTERNAL_BROADCAST_PERMISSION, null);
         }
     }
 
@@ -149,6 +150,13 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         try { unregisterReceiver(controlReceiver); } catch (Exception ignored) {}
         if (tts != null) { tts.stop(); tts.shutdown(); }
         PlayerService.hide(this);
+        if (webView != null) {
+            webView.stopLoading();
+            webView.setWebChromeClient(null);
+            webView.setWebViewClient(null);
+            webView.destroy();
+            webView = null;
+        }
         super.onDestroy();
     }
 
@@ -608,7 +616,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         languageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                selectedLanguageCode = pos == 1 ? "pl" : pos == 2 ? "en" : "auto";
+                String newCode = pos == 1 ? "pl" : pos == 2 ? "en" : "auto";
+                if (newCode.equals(selectedLanguageCode)) return;
+                selectedLanguageCode = newCode;
+                selectedVoiceName = "";
+                if (!allVoices.isEmpty()) refreshVoiceSpinner();
             }
             @Override public void onNothingSelected(AdapterView<?> p) { selectedLanguageCode = "auto"; }
         });
@@ -1050,32 +1062,53 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void loadVoices() {
         Set<Voice> available = tts.getVoices();
-        voices.clear();
-        voiceLabels.clear();
-        voiceLabels.add("Automatycznie");
+        allVoices.clear();
         if (available != null) {
             List<Voice> sorted = new ArrayList<>(available);
             sorted.sort(Comparator.comparing(v -> v.getLocale().toLanguageTag() + v.getName()));
             for (Voice v : sorted) {
-                if (isSupportedLang(v)) {
-                    voices.add(v);
-                    voiceLabels.add(v.getName() + " (" + v.getLocale().toLanguageTag() + ")");
-                }
+                if (isSupportedLang(v)) allVoices.add(v);
+            }
+        }
+        refreshVoiceSpinner();
+    }
+
+    private void refreshVoiceSpinner() {
+        voices.clear();
+        voiceLabels.clear();
+        voiceLabels.add("Automatycznie");
+        for (Voice v : allVoices) {
+            String lang = v.getLocale().getLanguage();
+            boolean include = "auto".equals(selectedLanguageCode)
+                || ("pl".equals(selectedLanguageCode) && "pl".equalsIgnoreCase(lang))
+                || ("en".equals(selectedLanguageCode) && "en".equalsIgnoreCase(lang));
+            if (include) {
+                voices.add(v);
+                voiceLabels.add(v.getName() + " (" + v.getLocale().toLanguageTag() + ")");
             }
         }
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_item, voiceLabels);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        if (voiceSpinner == null) return;
         voiceSpinner.setAdapter(adapter);
         voiceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                String newName = pos > 0 ? voices.get(pos - 1).getName() : "";
-                if (!newName.equals(selectedVoiceName)) {
-                    selectedVoiceName = newName;
-                    if (readingQueue && !paused && !currentChunks.isEmpty()) {
+                Voice picked = pos > 0 ? voices.get(pos - 1) : null;
+                String newName = picked != null ? picked.getName() : "";
+                if (newName.equals(selectedVoiceName)) return;
+                selectedVoiceName = newName;
+                if (ttsReady && tts != null) {
+                    if (picked != null) tts.setVoice(picked);
+                    else tts.setLanguage(detectLocale(
+                        textInput != null ? textInput.getText().toString() : ""));
+                    if (!currentChunks.isEmpty()) {
                         tts.stop();
+                        paused = false;
+                        readingQueue = true;
                         speakNextChunk();
+                        updatePlayPauseBtn();
                     }
                 }
             }

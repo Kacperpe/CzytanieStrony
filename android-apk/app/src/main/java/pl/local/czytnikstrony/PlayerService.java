@@ -26,6 +26,8 @@ public class PlayerService extends Service {
     static final String NOTIF_ACTION_STOP       = "czytnik.STOP";
     static final String KEY_NOTIF_ACTION        = "notif_action";
     static final String ACTION_CONTROL_EVENT    = "czytnik.CONTROL_EVENT";
+    static final String INTERNAL_BROADCAST_PERMISSION =
+        "pl.local.czytnikstrony.permission.INTERNAL_BROADCAST";
 
     private static final String ACTION_UPDATE = "czytnik.UPDATE";
     private static final String EXTRA_TITLE   = "title";
@@ -77,7 +79,7 @@ public class PlayerService extends Service {
             Intent control = new Intent(ACTION_CONTROL_EVENT);
             control.setPackage(getPackageName());
             control.putExtra(KEY_NOTIF_ACTION, action);
-            sendBroadcast(control);
+            sendBroadcast(control, INTERNAL_BROADCAST_PERMISSION);
             return START_NOT_STICKY;
         }
         if (!ACTION_UPDATE.equals(action)) {
@@ -116,6 +118,7 @@ public class PlayerService extends Service {
     private void createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm == null) return;
             if (nm.getNotificationChannel(CHANNEL_ID) != null) return;
             NotificationChannel ch = new NotificationChannel(
                 CHANNEL_ID, "Odtwarzanie", NotificationManager.IMPORTANCE_LOW);

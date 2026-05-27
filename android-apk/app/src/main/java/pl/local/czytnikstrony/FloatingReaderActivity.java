@@ -16,6 +16,7 @@ import android.view.Gravity;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -130,12 +131,13 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView dot = new TextView(this);
-        dot.setText("●");
-        dot.setTextColor(C_PRIMARY);
-        dot.setTextSize(9);
-        dot.setPadding(0, 0, dp(7), 0);
-        header.addView(dot);
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.drawable.ic_app_logo);
+        logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams loglp = new LinearLayout.LayoutParams(dp(28), dp(28));
+        loglp.setMargins(0, 0, dp(8), 0);
+        loglp.gravity = Gravity.CENTER_VERTICAL;
+        header.addView(logo, loglp);
 
         TextView titleTv = new TextView(this);
         titleTv.setText("Czytnik strony");
@@ -252,6 +254,7 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         String text = getClipboardText();
         if (text.isEmpty()) {
             clipPreview.setText("Schowek jest pusty");
+            clipPreview.setTextColor(C_MUTED);
         } else {
             clipPreview.setText(text);
             clipPreview.setTextColor(C_TEXT);

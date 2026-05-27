@@ -1,0 +1,53 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <!-- Dark indigo background -->
+    <path
+        android:fillColor="#1A1940"
+        android:pathData="M8,0h32a8,8 0 0 1 8,8v32a8,8 0 0 1-8,8H8a8,8 0 0 1-8,-8V8a8,8 0 0 1 8,-8z"/>
+
+    <!-- Left ear pad (D-shape, rounded left) -->
+    <path
+        android:fillColor="#7B6CF6"
+        android:pathData="M15,17a4,4 0 0 0 0,8h5v-8z"/>
+
+    <!-- Right ear pad (D-shape, rounded right) -->
+    <path
+        android:fillColor="#7B6CF6"
+        android:pathData="M33,17a4,4 0 0 1 0,8h-5v-8z"/>
+
+    <!-- Head circle -->
+    <path
+        android:fillColor="#7B6CF6"
+        android:pathData="M24,16a10,10 0 0 1 0,20a10,10 0 0 1 0,-20z"/>
+
+    <!-- Headphone band arc (white, over head) -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M15,21a9,8 0 0 1 18,0"/>
+
+    <!-- Left eye -->
+    <path
+        android:fillColor="#1A1940"
+        android:pathData="M20,24a2,2 0 0 1 0,4a2,2 0 0 1 0,-4z"/>
+
+    <!-- Right eye -->
+    <path
+        android:fillColor="#1A1940"
+        android:pathData="M28,24a2,2 0 0 1 0,4a2,2 0 0 1 0,-4z"/>
+
+    <!-- Smile -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#1A1940"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M20,30q4,-3 8,0"/>
+
+</vector>
