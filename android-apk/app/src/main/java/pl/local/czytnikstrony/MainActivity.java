@@ -930,10 +930,22 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             }
             return;
         }
-        applySpeechRate();
+        applyVoiceAndRate();
         tts.speak(currentChunks.get(currentChunkIndex),
             TextToSpeech.QUEUE_FLUSH, null, "c-" + currentChunkIndex);
         PlayerService.update(this, currentTitle, getCurrentChunkPreview(), true, currentChunkIndex, currentChunks.size());
+    }
+
+    private void applyVoiceAndRate() {
+        if (!ttsReady || tts == null) return;
+        String text = (!currentChunks.isEmpty() && currentChunkIndex < currentChunks.size())
+            ? currentChunks.get(currentChunkIndex)
+            : (textInput != null ? textInput.getText().toString() : "");
+        Locale locale = getSelectedLocale(text);
+        Voice  voice  = getBestVoice(locale);
+        if (voice != null) tts.setVoice(voice);
+        else               tts.setLanguage(locale);
+        tts.setSpeechRate(speechRate);
     }
 
     private void applySpeechRate() {
@@ -1058,7 +1070,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         voiceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                selectedVoiceName = pos > 0 ? voices.get(pos - 1).getName() : "";
+                String newName = pos > 0 ? voices.get(pos - 1).getName() : "";
+                if (!newName.equals(selectedVoiceName)) {
+                    selectedVoiceName = newName;
+                    if (readingQueue && !paused && !currentChunks.isEmpty()) {
+                        tts.stop();
+                        speakNextChunk();
+                    }
+                }
             }
             @Override public void onNothingSelected(AdapterView<?> p) { selectedVoiceName = ""; }
         });
@@ -1077,6 +1096,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     private Locale getSelectedLocale(String text) {
+        // Konkretny głos wybrany — użyj jego locale zamiast wykrywać
+        if (!selectedVoiceName.isEmpty()) {
+            for (Voice v : voices) {
+                if (v.getName().equals(selectedVoiceName)) return v.getLocale();
+            }
+        }
         if ("pl".equals(selectedLanguageCode)) return new Locale("pl", "PL");
         if ("en".equals(selectedLanguageCode)) return Locale.US;
         return detectLocale(text);
