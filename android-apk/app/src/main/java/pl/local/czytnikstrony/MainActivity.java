@@ -16,6 +16,11 @@ import android.os.Bundle;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.Spannable;
+import android.text.TextUtils;
+import android.text.style.BackgroundColorSpan;
 import android.view.Gravity;
 import android.view.View;
 import android.webkit.WebSettings;
@@ -25,6 +30,7 @@ import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -45,44 +51,48 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private static final int   MAX_CHUNK = 260;
     private static final float DEF_RATE  = 0.92f;
 
-    // ── Aktualizacje z GitHub ─────────────────────────────────────────────
-    private static final String GITHUB_OWNER = "";  // wpisz login GitHub np. "jan"
-    private static final String GITHUB_REPO  = "";  // wpisz nazwę repozytorium np. "czytnik"
+    private static final String GITHUB_OWNER = "Kacperpe";
+    private static final String GITHUB_REPO  = "CzytanieStrony";
 
-    // ── Kolory (ustawiane dynamicznie w initColors) ──────────────────────────
-    private int C_BG, C_SURFACE, C_SURFACE2, C_PRIMARY, C_ON_PRIMARY;
+    // ── Paleta kolorów ───────────────────────────────────────────────────────
+    private int C_BG, C_SURFACE, C_SURFACE2, C_PRIMARY, C_PRIMARY_DIM, C_ON_PRIMARY;
     private int C_TEXT, C_MUTED, C_BORDER, C_DANGER, C_DANGER_BG;
 
-    // ── Views ─────────────────────────────────────────────────────────────────
-    private EditText    urlInput;
-    private EditText    textInput;
-    private TextView    statusText;
-    private TextView    rateText;
-    private TextView    progressText;
-    private WebView     webView;
-    private ProgressBar loadingBar;
-    private SeekBar     rateSeekBar;
-    private SeekBar     progressSeekBar;
-    private Spinner     languageSpinner;
-    private Spinner     voiceSpinner;
+    // ── Views ────────────────────────────────────────────────────────────────
+    private EditText     urlInput;
+    private EditText     textInput;
+    private TextView     statusText;
+    private TextView     rateText;
+    private TextView     progressText;
+    private TextView     nowPlayingTitle;
+    private TextView     nowPlayingPreview;
+    private WebView      webView;
+    private ProgressBar  loadingBar;
+    private SeekBar      rateSeekBar;
+    private SeekBar      progressSeekBar;
+    private Spinner      languageSpinner;
+    private Spinner      voiceSpinner;
     private LinearLayout settingsPanel;
-    private Button      playPauseButton;
+    private Button       playPauseButton;
+    private Button       updateButton;
 
-    // ── Stan TTS ──────────────────────────────────────────────────────────────
-    private TextToSpeech    tts;
-    private final List<Voice>  voices      = new ArrayList<>();
-    private final List<String> voiceLabels = new ArrayList<>();
+    // ── Stan TTS ─────────────────────────────────────────────────────────────
+    private TextToSpeech         tts;
+    private final List<Voice>    voices      = new ArrayList<>();
+    private final List<String>   voiceLabels = new ArrayList<>();
     private String  selectedLanguageCode = "auto";
     private String  selectedVoiceName    = "";
     private float   speechRate           = DEF_RATE;
     private boolean ttsReady       = false;
     private boolean readingQueue    = false;
     private boolean paused          = false;
-    private List<String> currentChunks = new ArrayList<>();
-    private int currentChunkIndex = 0;
-    private boolean settingsVisible = false;
-    private String  currentTitle    = "";
-    private Button  updateButton;
+    private List<String>       currentChunks      = new ArrayList<>();
+    private final List<Integer> currentChunkStarts = new ArrayList<>();
+    private final List<Integer> currentChunkEnds   = new ArrayList<>();
+    private int     currentChunkIndex = 0;
+    private boolean settingsVisible   = false;
+    private String  currentTitle      = "";
+    private BackgroundColorSpan currentChunkSpan;
 
     private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
         @Override
@@ -143,7 +153,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Kolory
+    //  Paleta kolorów — inspiracja: Material You + odcienie szmaragdu
     // ════════════════════════════════════════════════════════════════════════
 
     private boolean isDarkMode() {
@@ -153,27 +163,29 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void initColors() {
         if (isDarkMode()) {
-            C_BG         = 0xFF0D1614;
-            C_SURFACE    = 0xFF182220;
-            C_SURFACE2   = 0xFF1F2D2A;
-            C_PRIMARY    = 0xFF3ECBA8;
-            C_ON_PRIMARY = 0xFF001A14;
-            C_TEXT       = 0xFFDCEDE9;
-            C_MUTED      = 0xFF7CA99F;
-            C_BORDER     = 0xFF2B3E3B;
-            C_DANGER     = 0xFFFF6E6E;
-            C_DANGER_BG  = 0xFF2A1515;
+            C_BG          = 0xFF080F0D;
+            C_SURFACE     = 0xFF111A18;
+            C_SURFACE2    = 0xFF182624;
+            C_PRIMARY     = 0xFF4DD8B5;
+            C_PRIMARY_DIM = 0xFF0F2924;
+            C_ON_PRIMARY  = 0xFF001812;
+            C_TEXT        = 0xFFE8F4F1;
+            C_MUTED       = 0xFF78A49F;
+            C_BORDER      = 0xFF243735;
+            C_DANGER      = 0xFFFF6B6B;
+            C_DANGER_BG   = 0xFF2C1515;
         } else {
-            C_BG         = 0xFFF0F6F5;
-            C_SURFACE    = 0xFFFFFFFF;
-            C_SURFACE2   = 0xFFF7FBFA;
-            C_PRIMARY    = 0xFF1A6B5A;
-            C_ON_PRIMARY = 0xFFFFFFFF;
-            C_TEXT       = 0xFF182624;
-            C_MUTED      = 0xFF58726E;
-            C_BORDER     = 0xFFCBDAD8;
-            C_DANGER     = 0xFFC0392B;
-            C_DANGER_BG  = 0xFFFFF0EE;
+            C_BG          = 0xFFF4F9F7;
+            C_SURFACE     = 0xFFFFFFFF;
+            C_SURFACE2    = 0xFFEDF5F2;
+            C_PRIMARY     = 0xFF1B6F5E;
+            C_PRIMARY_DIM = 0xFFE3F2EE;
+            C_ON_PRIMARY  = 0xFFFFFFFF;
+            C_TEXT        = 0xFF0D1F1C;
+            C_MUTED       = 0xFF527069;
+            C_BORDER      = 0xFFC8D9D5;
+            C_DANGER      = 0xFFC0392B;
+            C_DANGER_BG   = 0xFFFFF0EE;
         }
     }
 
@@ -184,7 +196,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     @Override
     public void onInit(int status) {
         ttsReady = (status == TextToSpeech.SUCCESS);
-        if (!ttsReady) { setStatus("TTS niedostępny na tym telefonie."); return; }
+        if (!ttsReady) { setStatus("TTS niedostępny na tym urządzeniu."); return; }
 
         tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
             @Override public void onStart(String id) {}
@@ -213,7 +225,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         });
 
         loadVoices();
-        setStatus("Gotowy.");
+        setStatus("Gotowy");
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -227,79 +239,97 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(12), dp(16), dp(28));
+        root.setPadding(dp(18), dp(20), dp(18), dp(32));
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
-        // ── Tytuł ──
-        TextView title = new TextView(this);
-        title.setText("Czytnik");
-        title.setTextColor(C_TEXT);
-        title.setTextSize(30);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setPadding(0, dp(4), 0, dp(10));
-        root.addView(title);
+        // ── Header ──────────────────────────────────────────────────────────
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
 
-        // ── Baner aktualizacji (domyślnie ukryty) ──
-        updateButton = new Button(this);
-        updateButton.setText("↑ Dostępna aktualizacja");
-        updateButton.setAllCaps(false);
-        updateButton.setTextSize(13);
-        updateButton.setTypeface(Typeface.DEFAULT_BOLD);
-        updateButton.setTextColor(C_ON_PRIMARY);
-        updateButton.setBackground(mkRound(C_PRIMARY, C_PRIMARY, 10));
-        updateButton.setPadding(dp(12), dp(10), dp(12), dp(10));
-        updateButton.setVisibility(View.GONE);
-        root.addView(updateButton, mbottom(dp(8)));
+        LinearLayout titleCol = new LinearLayout(this);
+        titleCol.setOrientation(LinearLayout.VERTICAL);
 
-        // ── Status ──
+        TextView appName = new TextView(this);
+        appName.setText("Czytnik");
+        appName.setTextColor(C_TEXT);
+        appName.setTextSize(28);
+        appName.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            appName.setLetterSpacing(-0.02f);
+        }
+        titleCol.addView(appName);
+
         statusText = new TextView(this);
         statusText.setText("Startuje…");
         statusText.setTextColor(C_PRIMARY);
-        statusText.setTextSize(13);
-        statusText.setPadding(dp(12), dp(8), dp(12), dp(8));
-        statusText.setBackground(mkRound(C_SURFACE, C_BORDER, 10));
-        root.addView(statusText, mbottom(dp(14)));
+        statusText.setTextSize(12);
+        statusText.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
+        LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(-1, -2);
+        stlp.setMargins(0, dp(1), 0, 0);
+        titleCol.addView(statusText, stlp);
+
+        header.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        // Baner aktualizacji (pill w nagłówku)
+        updateButton = new Button(this);
+        updateButton.setText("↑ Aktualizacja");
+        updateButton.setAllCaps(false);
+        updateButton.setTextSize(11);
+        updateButton.setTypeface(Typeface.DEFAULT_BOLD);
+        updateButton.setTextColor(C_ON_PRIMARY);
+        updateButton.setBackground(mkRound(C_PRIMARY, 0, 16));
+        updateButton.setPadding(dp(12), dp(6), dp(12), dp(6));
+        updateButton.setVisibility(View.GONE);
+        LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(-2, -2);
+        ulp.setMargins(dp(8), 0, 0, 0);
+        ulp.gravity = Gravity.CENTER_VERTICAL;
+        header.addView(updateButton, ulp);
+
+        root.addView(header, mbottom(dp(20)));
 
         // ── Karta URL ──
-        root.addView(buildUrlCard(), mbottom(dp(12)));
+        root.addView(buildUrlCard(), mbottom(dp(10)));
 
-        // WebView ukryty (1x1 px — tylko do ładowania stron w tle)
+        // WebView ukryty (1×1 px)
         webView = new WebView(this);
         webView.setVisibility(View.GONE);
         root.addView(webView, new LinearLayout.LayoutParams(1, 1));
 
         // ── Karta tekstu ──
-        root.addView(buildTextCard(), mbottom(dp(12)));
+        root.addView(buildTextCard(), mbottom(dp(10)));
 
-        // ── Player ──
-        root.addView(buildPlayer(), mbottom(dp(12)));
+        // ── Player (hero) ──
+        root.addView(buildPlayer(), mbottom(dp(10)));
 
-        // ── Sekcja głosu (zwijana) ──
+        // ── Ustawienia głosu (zwijane) ──
         root.addView(buildSettingsToggle());
         settingsPanel = buildSettingsPanel();
         settingsPanel.setVisibility(View.GONE);
         root.addView(settingsPanel, mbottom(dp(10)));
 
-        // ── Kafelek ──
-        Button tileBtn = new Button(this);
-        tileBtn.setText("Dodaj kafelek do panelu szybkich ustawień");
-        tileBtn.setAllCaps(false);
-        tileBtn.setTextSize(13);
-        tileBtn.setTextColor(C_MUTED);
-        tileBtn.setBackground(mkRound(C_SURFACE, C_BORDER, 10));
-        tileBtn.setPadding(dp(12), dp(10), dp(12), dp(10));
-        tileBtn.setOnClickListener(v -> requestTile());
-        root.addView(tileBtn, mbottom(dp(6)));
+        // ── Link do kafelka szybkich ustawień ──
+        TextView tileLink = new TextView(this);
+        tileLink.setText("+ Dodaj kafelek szybkich ustawień");
+        tileLink.setTextColor(C_MUTED);
+        tileLink.setTextSize(12);
+        tileLink.setPadding(dp(4), dp(8), dp(4), dp(4));
+        tileLink.setClickable(true);
+        tileLink.setOnClickListener(v -> requestTile());
+        root.addView(tileLink);
 
         setContentView(scroll);
 
-        // Kolor paska statusu
+        // Pasek systemu
         getWindow().setStatusBarColor(C_BG);
+        getWindow().setNavigationBarColor(C_BG);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.view.WindowInsetsController wic = getWindow().getInsetsController();
             if (wic != null) {
                 int flag = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
-                wic.setSystemBarsAppearance(isDarkMode() ? 0 : flag, flag);
+                int navFlag = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                int bothFlags = flag | navFlag;
+                wic.setSystemBarsAppearance(isDarkMode() ? 0 : bothFlags, bothFlags);
             }
         }
     }
@@ -309,37 +339,39 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private LinearLayout buildUrlCard() {
         LinearLayout card = surfaceCard();
 
+        TextView label = sectionLabel("ADRES STRONY");
+        root_add_with_bottom(card, label, dp(8));
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
         urlInput = new EditText(this);
         urlInput.setSingleLine(true);
-        urlInput.setHint("Adres strony…");
+        urlInput.setHint("https://...");
         urlInput.setTextColor(C_TEXT);
         urlInput.setHintTextColor(C_MUTED);
         urlInput.setTextSize(14);
-        urlInput.setPadding(dp(10), dp(8), dp(10), dp(8));
-        urlInput.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
-        LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(0, dp(44), 1f);
-        ulp.setMargins(0, 0, dp(8), 0);
-        row.addView(urlInput, ulp);
+        urlInput.setPadding(dp(14), dp(11), dp(14), dp(11));
+        urlInput.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        inputLp.setMargins(0, 0, dp(8), 0);
+        row.addView(urlInput, inputLp);
 
-        Button loadBtn   = compBtn("Otwórz", false);
-        Button readerBtn = compBtn("▶ Czytaj", true);
-        row.addView(loadBtn,   compBtnLp());
-        row.addView(readerBtn, compBtnLp());
+        Button readBtn = primaryBtn("Czytaj");
+        row.addView(readBtn, actionBtnLp());
         card.addView(row);
 
         loadingBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         loadingBar.setMax(100);
         loadingBar.setVisibility(View.GONE);
-        LinearLayout.LayoutParams lbp = new LinearLayout.LayoutParams(-1, dp(3));
-        lbp.setMargins(0, dp(6), 0, 0);
+        LinearLayout.LayoutParams lbp = new LinearLayout.LayoutParams(-1, dp(2));
+        lbp.setMargins(0, dp(8), 0, 0);
         card.addView(loadingBar, lbp);
 
-        loadBtn.setOnClickListener(v   -> loadUrlFromInput());
-        readerBtn.setOnClickListener(v -> extractAndRead());
+        readBtn.setOnClickListener(v -> extractAndRead());
+        urlInput.setOnEditorActionListener((v, actionId, event) -> { extractAndRead(); return true; });
 
         return card;
     }
@@ -349,93 +381,98 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private LinearLayout buildTextCard() {
         LinearLayout card = surfaceCard();
 
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(0, 0, 0, dp(8));
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams trp = new LinearLayout.LayoutParams(-1, -2);
+        trp.setMargins(0, 0, 0, dp(8));
 
-        TextView lbl = new TextView(this);
-        lbl.setText("TEKST");
-        lbl.setTextColor(C_MUTED);
-        lbl.setTextSize(11);
-        lbl.setTypeface(Typeface.DEFAULT_BOLD);
-        header.addView(lbl, new LinearLayout.LayoutParams(0, -2, 1f));
+        topRow.addView(sectionLabel("TEKST"), new LinearLayout.LayoutParams(0, -2, 1f));
 
-        Button clearBtn = new Button(this);
-        clearBtn.setText("Wyczyść");
-        clearBtn.setAllCaps(false);
-        clearBtn.setTextSize(12);
-        clearBtn.setTextColor(C_MUTED);
-        clearBtn.setBackground(null);
-        clearBtn.setMinHeight(0);
-        clearBtn.setMinimumHeight(0);
-        clearBtn.setPadding(dp(8), 0, 0, 0);
-        header.addView(clearBtn);
-        card.addView(header);
+        Button clearBtn = ghostBtn("Wyczyść");
+        topRow.addView(clearBtn);
+        card.addView(topRow, trp);
 
         textInput = new EditText(this);
         textInput.setGravity(Gravity.TOP);
-        textInput.setMinLines(4);
-        textInput.setHint("Tekst pojawi się tu po kliknięciu ▶ Czytaj,\nlub wklej własny tekst…");
+        textInput.setMinLines(3);
+        textInput.setHint("Tekst pojawi się po kliknięciu Czytaj\nlub wklej własny…");
         textInput.setTextColor(C_TEXT);
         textInput.setHintTextColor(C_MUTED);
-        textInput.setTextSize(15);
-        textInput.setLineSpacing(dp(2), 1f);
-        textInput.setPadding(dp(10), dp(8), dp(10), dp(8));
-        textInput.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
-        card.addView(textInput, new LinearLayout.LayoutParams(-1, dp(160)));
+        textInput.setTextSize(14);
+        textInput.setLineSpacing(dp(3), 1f);
+        textInput.setPadding(dp(14), dp(11), dp(14), dp(11));
+        textInput.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        card.addView(textInput, new LinearLayout.LayoutParams(-1, dp(148)));
 
         LinearLayout btns = new LinearLayout(this);
         btns.setOrientation(LinearLayout.HORIZONTAL);
         btns.setGravity(Gravity.END);
-        LinearLayout.LayoutParams btp = new LinearLayout.LayoutParams(-1, -2);
-        btp.setMargins(0, dp(8), 0, 0);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
+        blp.setMargins(0, dp(8), 0, 0);
 
-        Button readTextBtn = compBtn("▶ Czytaj tekst", true);
-        Button cursorBtn   = compBtn("Od kursora", false);
-        btns.addView(cursorBtn,   compBtnLp());
-        btns.addView(readTextBtn, compBtnLp());
-        card.addView(btns, btp);
+        Button cursorBtn  = secondaryBtn("Od kursora");
+        Button readTxtBtn = primaryBtn("Czytaj tekst");
+        btns.addView(cursorBtn,  actionBtnLp());
+        btns.addView(readTxtBtn, actionBtnLp());
+        card.addView(btns, blp);
 
-        clearBtn.setOnClickListener(v   -> { textInput.setText(""); stopReading(); });
-        readTextBtn.setOnClickListener(v -> speak(textInput.getText().toString()));
-        cursorBtn.setOnClickListener(v   -> speakFromCursor());
+        clearBtn.setOnClickListener(v -> { textInput.setText(""); stopReading(); });
+        readTxtBtn.setOnClickListener(v -> speak(textInput.getText().toString()));
+        cursorBtn.setOnClickListener(v -> speakFromCursor());
 
         return card;
     }
 
-    // ── Player ───────────────────────────────────────────────────────────────
+    // ── Player — hero card ───────────────────────────────────────────────────
 
     private LinearLayout buildPlayer() {
-        LinearLayout card = surfaceCard();
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(18), dp(18), dp(16));
+        card.setBackground(mkRound(C_PRIMARY_DIM, isDarkMode() ? C_BORDER : 0, 22));
 
-        // Wiersz postępu
+        // Now-playing title
+        nowPlayingTitle = new TextView(this);
+        nowPlayingTitle.setText("Gotowy do czytania");
+        nowPlayingTitle.setTextColor(C_PRIMARY);
+        nowPlayingTitle.setTextSize(13);
+        nowPlayingTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        nowPlayingTitle.setSingleLine(true);
+        nowPlayingTitle.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(nowPlayingTitle);
+
+        // Fragment preview (italic, muted)
+        nowPlayingPreview = new TextView(this);
+        nowPlayingPreview.setText("");
+        nowPlayingPreview.setTextColor(C_MUTED);
+        nowPlayingPreview.setTextSize(12);
+        nowPlayingPreview.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.ITALIC));
+        nowPlayingPreview.setMaxLines(2);
+        nowPlayingPreview.setEllipsize(TextUtils.TruncateAt.END);
+        nowPlayingPreview.setLineSpacing(dp(2), 1f);
+        LinearLayout.LayoutParams pvlp = new LinearLayout.LayoutParams(-1, -2);
+        pvlp.setMargins(0, dp(3), 0, dp(14));
+        card.addView(nowPlayingPreview, pvlp);
+
+        // Pasek postępu + licznik
         LinearLayout progRow = new LinearLayout(this);
         progRow.setOrientation(LinearLayout.HORIZONTAL);
         progRow.setGravity(Gravity.CENTER_VERTICAL);
 
+        progressSeekBar = new SeekBar(this);
+        progressSeekBar.setMax(100);
+        progRow.addView(progressSeekBar, new LinearLayout.LayoutParams(0, dp(28), 1f));
+
         progressText = new TextView(this);
         progressText.setText("—");
         progressText.setTextColor(C_MUTED);
-        progressText.setTextSize(12);
+        progressText.setTextSize(11);
         progressText.setTypeface(Typeface.DEFAULT_BOLD);
-        progRow.addView(progressText, new LinearLayout.LayoutParams(0, -2, 1f));
-
-        rateText = new TextView(this);
-        rateText.setText(String.format(Locale.US, "%.2fx", DEF_RATE));
-        rateText.setTextColor(C_MUTED);
-        rateText.setTextSize(12);
-        rateText.setTypeface(Typeface.DEFAULT_BOLD);
-        progRow.addView(rateText);
+        LinearLayout.LayoutParams ptlp = new LinearLayout.LayoutParams(-2, -2);
+        ptlp.setMargins(dp(10), 0, 0, 0);
+        progRow.addView(progressText, ptlp);
         card.addView(progRow);
-
-        // Pasek postępu czytania
-        progressSeekBar = new SeekBar(this);
-        progressSeekBar.setMax(100);
-        progressSeekBar.setProgress(0);
-        LinearLayout.LayoutParams psp = new LinearLayout.LayoutParams(-1, dp(32));
-        psp.setMargins(0, dp(4), 0, 0);
-        card.addView(progressSeekBar, psp);
 
         // Przyciski sterowania
         LinearLayout controls = new LinearLayout(this);
@@ -444,26 +481,26 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
         clp.setMargins(0, dp(14), 0, 0);
 
-        Button prevBtn = navBtn("⏮");
-        playPauseButton = playBtn();
-        Button nextBtn = navBtn("⏭");
-        Button stopBtn = stopBtn();
+        Button prevBtn = controlBtn("⏮");
+        playPauseButton = playPauseBtn();
+        Button nextBtn = controlBtn("⏭");
+        Button stopBtn = stopButton();
 
-        LinearLayout.LayoutParams navLp = new LinearLayout.LayoutParams(dp(52), dp(52));
-        navLp.setMargins(dp(6), 0, dp(6), 0);
-        navLp.gravity = Gravity.CENTER_VERTICAL;
+        LinearLayout.LayoutParams ctrlLp = new LinearLayout.LayoutParams(dp(50), dp(50));
+        ctrlLp.gravity = Gravity.CENTER_VERTICAL;
+        ctrlLp.setMargins(dp(4), 0, dp(4), 0);
 
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(68), dp(68));
-        playLp.setMargins(dp(12), 0, dp(12), 0);
+        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(76), dp(76));
         playLp.gravity = Gravity.CENTER_VERTICAL;
+        playLp.setMargins(dp(10), 0, dp(10), 0);
 
-        controls.addView(prevBtn, navLp);
+        controls.addView(prevBtn,         ctrlLp);
         controls.addView(playPauseButton, playLp);
-        controls.addView(nextBtn, navLp);
-        controls.addView(stopBtn, navLp);
+        controls.addView(nextBtn,         ctrlLp);
+        controls.addView(stopBtn,         ctrlLp);
         card.addView(controls, clp);
 
-        // Pasek tempa
+        // Tempo
         LinearLayout rateRow = new LinearLayout(this);
         rateRow.setOrientation(LinearLayout.HORIZONTAL);
         rateRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -473,21 +510,30 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         TextView rateLabel = new TextView(this);
         rateLabel.setText("Tempo");
         rateLabel.setTextColor(C_MUTED);
-        rateLabel.setTextSize(12);
+        rateLabel.setTextSize(11);
         rateLabel.setPadding(0, 0, dp(10), 0);
         rateRow.addView(rateLabel);
 
         rateSeekBar = new SeekBar(this);
         rateSeekBar.setMax(120);
-        rateSeekBar.setProgress(32); // ~0.92x
+        rateSeekBar.setProgress(32);
         rateRow.addView(rateSeekBar, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        rateText = new TextView(this);
+        rateText.setText(String.format(Locale.US, "%.2fx", DEF_RATE));
+        rateText.setTextColor(C_MUTED);
+        rateText.setTextSize(11);
+        rateText.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams rtlp = new LinearLayout.LayoutParams(-2, -2);
+        rtlp.setMargins(dp(10), 0, 0, 0);
+        rateRow.addView(rateText, rtlp);
         card.addView(rateRow, rlp);
 
         // Zdarzenia
-        prevBtn.setOnClickListener(v         -> goToPrevChunk());
+        prevBtn.setOnClickListener(v -> goToPrevChunk());
         playPauseButton.setOnClickListener(v -> handlePlayPause());
-        nextBtn.setOnClickListener(v         -> goToNextChunk());
-        stopBtn.setOnClickListener(v         -> stopReading());
+        nextBtn.setOnClickListener(v -> goToNextChunk());
+        stopBtn.setOnClickListener(v -> stopReading());
 
         progressSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {}
@@ -515,26 +561,28 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return card;
     }
 
-    // ── Sekcja ustawień głosu (zwijana) ─────────────────────────────────────
+    // ── Sekcja ustawień (zwijana) ─────────────────────────────────────────
 
     private Button buildSettingsToggle() {
         Button toggle = new Button(this);
-        toggle.setText("⚙  Głos i język  ▾");
+        toggle.setText("Głos i język  ▾");
         toggle.setAllCaps(false);
-        toggle.setTextSize(13);
+        toggle.setTextSize(12);
+        toggle.setTypeface(Typeface.DEFAULT_BOLD);
         toggle.setTextColor(C_MUTED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            toggle.setLetterSpacing(0.04f);
+        }
         toggle.setBackground(null);
         toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        toggle.setPadding(dp(2), dp(6), dp(4), dp(6));
+        toggle.setPadding(dp(2), dp(8), dp(4), dp(8));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, dp(4));
         toggle.setLayoutParams(lp);
         toggle.setOnClickListener(v -> {
             settingsVisible = !settingsVisible;
             settingsPanel.setVisibility(settingsVisible ? View.VISIBLE : View.GONE);
-            toggle.setText(settingsVisible
-                ? "⚙  Głos i język  ▴"
-                : "⚙  Głos i język  ▾");
+            toggle.setText(settingsVisible ? "Głos i język  ▴" : "Głos i język  ▾");
         });
         return toggle;
     }
@@ -542,106 +590,134 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private LinearLayout buildSettingsPanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(14), dp(12), dp(14), dp(14));
-        panel.setBackground(mkRound(C_SURFACE, C_BORDER, 14));
+        panel.setPadding(dp(16), dp(14), dp(16), dp(16));
+        panel.setBackground(mkRound(C_SURFACE, C_BORDER, 20));
 
-        panel.addView(settingsLabel("Język"));
+        LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(-1, dp(50));
+        LinearLayout.LayoutParams spacedLp  = new LinearLayout.LayoutParams(-1, -2);
+        spacedLp.setMargins(0, dp(12), 0, 0);
 
-        languageSpinner = new Spinner(this);
-        languageSpinner.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
-        languageSpinner.setPadding(dp(8), 0, dp(8), 0);
-        ArrayAdapter<String> langAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
-            new String[]{"Automatycznie", "Polski", "English"});
-        langAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        languageSpinner.setAdapter(langAdapter);
-        panel.addView(languageSpinner, new LinearLayout.LayoutParams(-1, dp(48)));
+        panel.addView(sectionLabel("JĘZYK"));
+        languageSpinner = styledSpinner(new String[]{"Automatycznie", "Polski", "English"});
+        panel.addView(languageSpinner, spinnerLp);
 
-        LinearLayout.LayoutParams vlp = new LinearLayout.LayoutParams(-1, -2);
-        vlp.setMargins(0, dp(10), 0, 0);
-        panel.addView(settingsLabel("Głos"), vlp);
-
-        voiceSpinner = new Spinner(this);
-        voiceSpinner.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
-        voiceSpinner.setPadding(dp(8), 0, dp(8), 0);
-        panel.addView(voiceSpinner, new LinearLayout.LayoutParams(-1, dp(48)));
+        panel.addView(sectionLabel("GŁOS"), spacedLp);
+        voiceSpinner = styledSpinner(new String[]{});
+        panel.addView(voiceSpinner, spinnerLp);
 
         languageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
-            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
-                selectedLanguageCode = position == 1 ? "pl" : position == 2 ? "en" : "auto";
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                selectedLanguageCode = pos == 1 ? "pl" : pos == 2 ? "en" : "auto";
             }
-            @Override public void onNothingSelected(AdapterView<?> parent) { selectedLanguageCode = "auto"; }
+            @Override public void onNothingSelected(AdapterView<?> p) { selectedLanguageCode = "auto"; }
         });
 
         return panel;
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Przyciski — fabryki
+    //  Fabryki widgetów
     // ════════════════════════════════════════════════════════════════════════
 
-    private Button compBtn(String text, boolean primary) {
+    private Button primaryBtn(String text) {
         Button btn = new Button(this);
         btn.setText(text);
         btn.setAllCaps(false);
-        btn.setTextSize(14);
-        btn.setTypeface(Typeface.DEFAULT_BOLD);
-        btn.setPadding(dp(12), 0, dp(12), 0);
-        if (primary) {
-            btn.setTextColor(C_ON_PRIMARY);
-            btn.setBackground(mkRound(C_PRIMARY, C_PRIMARY, 10));
-        } else {
-            btn.setTextColor(C_TEXT);
-            btn.setBackground(mkRound(C_SURFACE2, C_BORDER, 10));
-        }
+        btn.setTextSize(13);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTextColor(C_ON_PRIMARY);
+        btn.setBackground(mkRound(C_PRIMARY, 0, 12));
+        btn.setPadding(dp(14), 0, dp(14), 0);
         return btn;
     }
 
-    private LinearLayout.LayoutParams compBtnLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(44));
-        lp.setMargins(dp(6), 0, 0, 0);
+    private Button secondaryBtn(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextSize(13);
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTextColor(C_TEXT);
+        btn.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        btn.setPadding(dp(14), 0, dp(14), 0);
+        return btn;
+    }
+
+    private Button ghostBtn(String text) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextSize(12);
+        btn.setTextColor(C_MUTED);
+        btn.setBackground(null);
+        btn.setMinHeight(0);
+        btn.setMinimumHeight(0);
+        btn.setPadding(dp(8), 0, 0, 0);
+        return btn;
+    }
+
+    private LinearLayout.LayoutParams actionBtnLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(46));
+        lp.setMargins(dp(8), 0, 0, 0);
         return lp;
     }
 
-    private Button navBtn(String text) {
+    private Button controlBtn(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextSize(18);
+        btn.setTextSize(20);
         btn.setAllCaps(false);
-        btn.setTextColor(C_TEXT);
-        btn.setBackground(mkRound(C_SURFACE2, C_BORDER, 26));
+        btn.setTextColor(C_PRIMARY);
+        btn.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, isDarkMode() ? C_BORDER : 0, 25));
         btn.setPadding(0, 0, 0, 0);
         return btn;
     }
 
-    private Button playBtn() {
+    private Button playPauseBtn() {
         Button btn = new Button(this);
         btn.setText("▶");
-        btn.setTextSize(26);
+        btn.setTextSize(30);
         btn.setAllCaps(false);
         btn.setTextColor(C_ON_PRIMARY);
-        btn.setBackground(mkRound(C_PRIMARY, C_PRIMARY, 34));
+        btn.setBackground(mkRound(C_PRIMARY, 0, 38));
         btn.setPadding(0, 0, 0, 0);
         return btn;
     }
 
-    private Button stopBtn() {
+    private Button stopButton() {
         Button btn = new Button(this);
         btn.setText("⏹");
         btn.setTextSize(18);
         btn.setAllCaps(false);
         btn.setTextColor(C_DANGER);
-        btn.setBackground(mkRound(C_DANGER_BG, C_DANGER_BG, 26));
+        btn.setBackground(mkRound(C_DANGER_BG, 0, 25));
         btn.setPadding(0, 0, 0, 0);
         return btn;
     }
 
-    private TextView settingsLabel(String text) {
+    private Spinner styledSpinner(String[] items) {
+        Spinner spinner = new Spinner(this);
+        spinner.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        spinner.setPadding(dp(12), 0, dp(12), 0);
+        if (items.length > 0) {
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, items);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinner.setAdapter(adapter);
+        }
+        return spinner;
+    }
+
+    private TextView sectionLabel(String text) {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextColor(C_MUTED);
-        tv.setTextSize(12);
+        tv.setTextSize(10);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            tv.setLetterSpacing(0.12f);
+        }
         tv.setPadding(0, 0, 0, dp(4));
         return tv;
     }
@@ -653,8 +729,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private LinearLayout surfaceCard() {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(14), dp(14), dp(14), dp(14));
-        card.setBackground(mkRound(C_SURFACE, C_BORDER, 16));
+        card.setPadding(dp(16), dp(14), dp(16), dp(14));
+        card.setBackground(mkRound(C_SURFACE, C_BORDER, 20));
         return card;
     }
 
@@ -662,7 +738,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         GradientDrawable d = new GradientDrawable();
         d.setColor(fill);
         d.setCornerRadius(dp(radiusDp));
-        d.setStroke(dp(1), stroke);
+        if (stroke != 0) d.setStroke(dp(1), stroke);
         return d;
     }
 
@@ -670,6 +746,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, bottom);
         return lp;
+    }
+
+    private void root_add_with_bottom(LinearLayout parent, View child, int bottom) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, bottom);
+        parent.addView(child, lp);
     }
 
     private int dp(int v) {
@@ -818,6 +900,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (text.isEmpty()) { setStatus("Brak tekstu do czytania."); return; }
         if (!ttsReady)      { setStatus("TTS nie jest jeszcze gotowy."); return; }
         stopReading();
+        textInput.setText(text);
         Locale locale = getSelectedLocale(text);
         Voice  voice  = getBestVoice(locale);
         if (voice != null) { tts.setVoice(voice); locale = voice.getLocale(); }
@@ -841,6 +924,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 readingQueue = false;
                 setStatus("Koniec.");
                 updatePlayPauseBtn();
+                if (nowPlayingTitle   != null) nowPlayingTitle.setText("Koniec czytania");
+                if (nowPlayingPreview != null) nowPlayingPreview.setText("");
                 PlayerService.hide(this);
             }
             return;
@@ -881,8 +966,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         readingQueue = false;
         paused = false;
         currentChunks = new ArrayList<>();
+        currentChunkStarts.clear();
+        currentChunkEnds.clear();
         currentChunkIndex = 0;
         if (tts != null) tts.stop();
+        clearChunkHighlight();
         updateProgress();
         PlayerService.hide(this);
     }
@@ -892,11 +980,21 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (currentChunks.isEmpty()) {
             progressText.setText("—");
             progressSeekBar.setProgress(0);
+            clearChunkHighlight();
+            if (nowPlayingTitle   != null) nowPlayingTitle.setText("Gotowy do czytania");
+            if (nowPlayingPreview != null) nowPlayingPreview.setText("");
         } else {
             int total = currentChunks.size();
             progressText.setText((currentChunkIndex + 1) + " / " + total);
             int pct = total <= 1 ? 0 : (int)(currentChunkIndex * 100f / (total - 1));
             progressSeekBar.setProgress(pct);
+            applyCurrentChunkHighlight();
+            if (nowPlayingTitle != null) {
+                nowPlayingTitle.setText(currentTitle.isEmpty() ? "Czyta…" : currentTitle);
+            }
+            if (nowPlayingPreview != null) {
+                nowPlayingPreview.setText(getCurrentChunkPreview());
+            }
         }
         updatePlayPauseBtn();
     }
@@ -907,12 +1005,31 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     private String getCurrentChunkPreview() {
-        if (currentChunks.isEmpty() || currentChunkIndex < 0 || currentChunkIndex >= currentChunks.size()) {
+        if (currentChunks.isEmpty() || currentChunkIndex < 0 || currentChunkIndex >= currentChunks.size())
             return "";
-        }
         String chunk = currentChunks.get(currentChunkIndex).replace("\n", " ").trim();
-        if (chunk.length() <= 90) return chunk;
-        return chunk.substring(0, 90).trim() + "...";
+        return chunk.length() <= 90 ? chunk : chunk.substring(0, 90).trim() + "…";
+    }
+
+    private void clearChunkHighlight() {
+        Editable e = textInput != null ? textInput.getText() : null;
+        if (e == null) return;
+        if (currentChunkSpan != null) e.removeSpan(currentChunkSpan);
+        currentChunkSpan = null;
+    }
+
+    private void applyCurrentChunkHighlight() {
+        Editable e = textInput != null ? textInput.getText() : null;
+        if (e == null) return;
+        clearChunkHighlight();
+        if (currentChunkIndex < 0 || currentChunkIndex >= currentChunkStarts.size()) return;
+        int start = Math.max(0, Math.min(currentChunkStarts.get(currentChunkIndex), e.length()));
+        int end   = Math.max(start, Math.min(currentChunkEnds.get(currentChunkIndex), e.length()));
+        if (end <= start) return;
+        int bg = isDarkMode() ? 0xAA4DD8B5 : 0x551B6F5E;
+        currentChunkSpan = new BackgroundColorSpan(bg);
+        e.setSpan(currentChunkSpan, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        textInput.setSelection(end);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -987,19 +1104,35 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private List<String> splitIntoChunks(String text) {
         List<String> chunks = new ArrayList<>();
+        currentChunkStarts.clear();
+        currentChunkEnds.clear();
         String[] parts = text.split("(?<=[.!?;:])\\s+");
         StringBuilder current = new StringBuilder();
+        int currentStart = -1, currentEnd = -1, searchFrom = 0;
         for (String part : parts) {
             String t = part.trim();
             if (t.isEmpty()) continue;
+            int partStart = text.indexOf(t, searchFrom);
+            if (partStart < 0) partStart = searchFrom;
+            int partEnd = Math.min(text.length(), partStart + t.length());
+            searchFrom = partEnd;
             if (current.length() > 0 && current.length() + t.length() + 1 > MAX_CHUNK) {
                 chunks.add(current.toString());
+                currentChunkStarts.add(currentStart);
+                currentChunkEnds.add(currentEnd);
                 current.setLength(0);
+                currentStart = -1;
             }
+            if (current.length() == 0) currentStart = partStart;
             if (current.length() > 0) current.append(' ');
             current.append(t);
+            currentEnd = partEnd;
         }
-        if (current.length() > 0) chunks.add(current.toString());
+        if (current.length() > 0) {
+            chunks.add(current.toString());
+            currentChunkStarts.add(currentStart);
+            currentChunkEnds.add(currentEnd);
+        }
         return chunks;
     }
 
@@ -1034,7 +1167,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Sprawdzanie aktualizacji
+    //  Sprawdzanie aktualizacji z GitHub
     // ════════════════════════════════════════════════════════════════════════
 
     private void checkForUpdate() {
@@ -1048,7 +1181,6 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 conn.setReadTimeout(6000);
                 conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
                 if (conn.getResponseCode() != 200) { conn.disconnect(); return; }
-
                 StringBuilder sb = new StringBuilder();
                 try (java.io.BufferedReader r = new java.io.BufferedReader(
                         new java.io.InputStreamReader(conn.getInputStream()))) {
@@ -1056,16 +1188,13 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                     while ((line = r.readLine()) != null) sb.append(line);
                 }
                 conn.disconnect();
-
-                JSONObject json     = new JSONObject(sb.toString());
-                String latestTag    = json.optString("tag_name", "").replaceAll("[^0-9.]", "");
-                String releaseUrl   = json.optString("html_url", "");
-                String currentVer   = getPackageManager()
-                    .getPackageInfo(getPackageName(), 0).versionName;
-
+                JSONObject json   = new JSONObject(sb.toString());
+                String latestTag  = json.optString("tag_name", "").replaceAll("[^0-9.]", "");
+                String releaseUrl = json.optString("html_url", "");
+                String currentVer = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                 if (!latestTag.isEmpty() && isNewerVersion(latestTag, currentVer)) {
                     runOnUiThread(() -> {
-                        updateButton.setText("↑ Nowa wersja " + latestTag + " – kliknij aby pobrać");
+                        updateButton.setText("↑ Nowa wersja " + latestTag);
                         updateButton.setVisibility(View.VISIBLE);
                         updateButton.setOnClickListener(v ->
                             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl))));
@@ -1077,8 +1206,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private boolean isNewerVersion(String latest, String current) {
         try {
-            int[] l = parseVer(latest);
-            int[] c = parseVer(current);
+            int[] l = parseVer(latest), c = parseVer(current);
             for (int i = 0; i < Math.min(l.length, c.length); i++) {
                 if (l[i] > c[i]) return true;
                 if (l[i] < c[i]) return false;

@@ -8,6 +8,10 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.drawable.Icon;
 import android.media.session.MediaSession;
 import android.os.Build;
@@ -121,27 +125,69 @@ public class PlayerService extends Service {
     }
 
     private Notification buildNotification(String title, String nowPlaying, boolean playing, int chunk, int total) {
-        Icon   icon      = Icon.createWithResource(this, R.drawable.ic_reader_tile);
-        String mainTitle = (title != null && !title.isEmpty()) ? title : "Czytnik strony";
+        String mainTitle   = (title != null && !title.isEmpty()) ? title : "Czytnik strony";
         String contentText = (nowPlaying != null && !nowPlaying.isEmpty()) ? nowPlaying : "Czyta…";
-        String subText   = total > 0 ? "Fragment " + (chunk + 1) + " / " + total : null;
+        String subText     = total > 0 ? "Fragment " + (chunk + 1) + " / " + total : null;
 
-        return new Notification.Builder(this, CHANNEL_ID)
+        Icon iconPrev      = Icon.createWithResource(this, R.drawable.ic_skip_prev);
+        Icon iconPlayPause = Icon.createWithResource(this, playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        Icon iconNext      = Icon.createWithResource(this, R.drawable.ic_skip_next);
+        Icon iconStop      = Icon.createWithResource(this, R.drawable.ic_stop);
+
+        Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_reader_tile)
+            .setLargeIcon(createLargeIcon())
             .setContentTitle(mainTitle)
             .setContentText(contentText)
             .setSubText(subText)
             .setContentIntent(pendingToMain())
             .setOngoing(playing)
-            .addAction(new Notification.Action.Builder(icon, "Cofnij", pendingControl(NOTIF_ACTION_PREV, 1)).build())
-            .addAction(new Notification.Action.Builder(icon, playing ? "Pauza" : "Start", pendingControl(NOTIF_ACTION_PLAY_PAUSE, 2)).build())
-            .addAction(new Notification.Action.Builder(icon, "Dalej", pendingControl(NOTIF_ACTION_NEXT, 3)).build())
-            .addAction(new Notification.Action.Builder(icon, "Stop", pendingControl(NOTIF_ACTION_STOP, 4)).build())
+            .addAction(new Notification.Action.Builder(iconPrev,      "Cofnij",                   pendingControl(NOTIF_ACTION_PREV,       1)).build())
+            .addAction(new Notification.Action.Builder(iconPlayPause, playing ? "Pauza" : "Start", pendingControl(NOTIF_ACTION_PLAY_PAUSE, 2)).build())
+            .addAction(new Notification.Action.Builder(iconNext,      "Dalej",                    pendingControl(NOTIF_ACTION_NEXT,       3)).build())
+            .addAction(new Notification.Action.Builder(iconStop,      "Stop",                     pendingControl(NOTIF_ACTION_STOP,       4)).build())
             .setStyle(new Notification.MediaStyle()
                 .setMediaSession(mediaSession.getSessionToken())
                 .setShowActionsInCompactView(0, 1, 2))
-            .setVisibility(Notification.VISIBILITY_PUBLIC)
-            .build();
+            .setVisibility(Notification.VISIBILITY_PUBLIC);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            builder.setColor(0xFF1B7058).setColorized(true);
+        }
+
+        return builder.build();
+    }
+
+    private Bitmap createLargeIcon() {
+        int size = 128;
+        Bitmap bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(bmp);
+
+        Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bg.setColor(0xFF1B7058);
+        canvas.drawRoundRect(new RectF(0, 0, size, size), 28, 28, bg);
+
+        Paint wave = new Paint(Paint.ANTI_ALIAS_FLAG);
+        wave.setColor(0xFFFFFFFF);
+        wave.setStyle(Paint.Style.STROKE);
+        wave.setStrokeCap(Paint.Cap.ROUND);
+
+        float cx = size / 2f;
+        float cy = size / 2f;
+        float[] heights = {14, 22, 32, 22, 14};
+        float barW = 8f;
+        float gap  = 6f;
+        float totalW = heights.length * barW + (heights.length - 1) * gap;
+        float startX = cx - totalW / 2f + barW / 2f;
+
+        for (int i = 0; i < heights.length; i++) {
+            float x = startX + i * (barW + gap);
+            float h = heights[i];
+            wave.setStrokeWidth(barW);
+            canvas.drawLine(x, cy - h, x, cy + h, wave);
+        }
+
+        return bmp;
     }
 
     private PendingIntent pendingToMain() {
