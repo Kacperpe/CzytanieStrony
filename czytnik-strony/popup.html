@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Czytnik strony</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header>
+        <h1>Czytnik strony</h1>
+        <p id="status" aria-live="polite">Gotowy</p>
+      </header>
+
+      <section class="controls" aria-label="Sterowanie czytaniem">
+        <button id="read" type="button">Czytaj</button>
+        <button id="pickStart" type="button">Wskaz start</button>
+        <button id="pauseResume" type="button">Pauza/Wznow</button>
+        <button id="stop" type="button">Stop</button>
+      </section>
+
+      <section class="settings" aria-label="Ustawienia czytania">
+        <label for="voice">Glos</label>
+        <select id="voice">
+          <option value="">Automatycznie</option>
+        </select>
+
+        <label for="mode">Zakres</label>
+        <select id="mode">
+          <option value="auto">Auto</option>
+          <option value="selection">Tylko zaznaczenie</option>
+          <option value="fromSelection">Od zaznaczenia do konca</option>
+          <option value="article">Article</option>
+          <option value="main">Main</option>
+          <option value="body">Cala strona</option>
+        </select>
+
+        <div class="toggle-row">
+          <label for="translate">Tłumacz na polski</label>
+          <input id="translate" type="checkbox">
+        </div>
+
+        <div class="rate-row">
+          <label for="rate">Tempo</label>
+          <output id="rateValue" for="rate">0.92x</output>
+        </div>
+        <input id="rate" type="range" min="0.6" max="1.8" step="0.05" value="0.92">
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,166 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 340px;
+  margin: 0;
+  color: #1c232b;
+  background: #f7f7f4;
+}
+
+.popup {
+  padding: 16px;
+}
+
+header {
+  margin-bottom: 14px;
+}
+
+h1 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+#status {
+  min-height: 20px;
+  margin: 0;
+  color: #53606b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #d9dde2;
+}
+
+label,
+output {
+  color: #53606b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+select,
+input[type="range"] {
+  width: 100%;
+}
+
+select {
+  min-height: 34px;
+  border: 1px solid #c9d0d8;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #111820;
+  background: #ffffff;
+  font: inherit;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #1d6f5f;
+  flex-shrink: 0;
+}
+
+.rate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+button {
+  min-height: 38px;
+  border: 1px solid #c9d0d8;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #111820;
+  background: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #eef3f8;
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+#read {
+  border-color: #1d6f5f;
+  color: #ffffff;
+  background: #1d6f5f;
+  grid-column: span 2;
+}
+
+#read:hover {
+  background: #185f52;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #edf1f4;
+    background: #181c20;
+  }
+
+  #status {
+    color: #aeb8c2;
+  }
+
+  .settings {
+    border-top-color: #333d47;
+  }
+
+  label,
+  output {
+    color: #aeb8c2;
+  }
+
+  button,
+  select {
+    border-color: #3a4651;
+    color: #edf1f4;
+    background: #252b31;
+  }
+
+  button:hover {
+    background: #303943;
+  }
+
+  #read {
+    border-color: #30a48e;
+    background: #21806e;
+  }
+
+  #read:hover {
+    background: #26927e;
+  }
+}

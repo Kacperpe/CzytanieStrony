@@ -1,0 +1,9 @@
+plugins {
+    id "com.android.application" version '8.13.2' apply false
+}
+
+layout.buildDirectory.set(file("${System.getProperty("user.home")}/.czytnik-strony-build/${rootProject.name}/root"))
+
+subprojects {
+    layout.buildDirectory.set(file("${System.getProperty("user.home")}/.czytnik-strony-build/${rootProject.name}/${project.name}"))
+}

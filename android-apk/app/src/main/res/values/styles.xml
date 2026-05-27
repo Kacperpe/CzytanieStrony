@@ -1,0 +1,22 @@
+<resources>
+    <!-- Motyw jasny -->
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:colorAccent">#1A6B5A</item>
+        <item name="android:colorControlActivated">#1A6B5A</item>
+        <item name="android:colorControlHighlight">#201A6B5A</item>
+    </style>
+
+    <!-- Motyw jasny — nakładka floating -->
+    <style name="FloatingPanelTheme" parent="android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.15</item>
+        <item name="android:colorAccent">#1A6B5A</item>
+    </style>
+</resources>

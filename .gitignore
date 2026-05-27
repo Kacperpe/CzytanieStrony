@@ -1,0 +1,13 @@
+# Android build
+android-apk/.gradle/
+android-apk/app/build/
+android-apk/build/
+android-apk/local.properties
+
+# Android IDE
+android-apk/.idea/caches/
+*.iml
+.DS_Store
+
+# Node / Chrome ext (none here but just in case)
+node_modules/

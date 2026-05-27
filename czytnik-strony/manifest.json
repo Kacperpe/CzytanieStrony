@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Czytnik strony",
+  "version": "0.1.0",
+  "description": "Lokalne czytanie zaznaczenia lub glownej tresci strony przy uzyciu glosow z przegladarki.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://translate.googleapis.com/*"],
+  "action": {
+    "default_title": "Czytnik strony",
+    "default_popup": "popup.html"
+  }
+}
