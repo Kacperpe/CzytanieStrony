@@ -34,11 +34,19 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug
         working-directory: android-apk
 
-      - name: Rename APK
-        run: mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/CzytanieStrony-${GITHUB_REF_NAME}-debug.apk
+      - name: Prepare release APK
+        run: |
+          mkdir -p release-artifacts
+          APK_PATH="$(find "$HOME/.czytnik-strony-build" app/build -path "*/outputs/apk/debug/*.apk" -print -quit 2>/dev/null)"
+          if [ -z "$APK_PATH" ]; then
+            echo "No debug APK found"
+            exit 1
+          fi
+          cp "$APK_PATH" "release-artifacts/CzytanieStrony-${GITHUB_REF_NAME}-debug.apk"
+          ls -lh release-artifacts
         working-directory: android-apk
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: android-apk/app/build/outputs/apk/debug/CzytanieStrony-${{ github.ref_name }}-debug.apk
+          files: android-apk/release-artifacts/CzytanieStrony-${{ github.ref_name }}-debug.apk
