@@ -23,6 +23,7 @@ import android.widget.TextView;
 import java.util.Locale;
 
 public class FloatingReaderActivity extends Activity implements TextToSpeech.OnInitListener {
+    private static final int MAX_TTS_CHUNK = 260;
 
     private int C_SURFACE, C_SURFACE2, C_PRIMARY, C_PRIMARY_DIM, C_ON_PRIMARY;
     private int C_TEXT, C_MUTED, C_BORDER, C_DANGER, C_DANGER_BG;
@@ -77,27 +78,27 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
 
     private void initColors() {
         if (isDarkMode()) {
-            C_SURFACE     = 0xFF13152A;
-            C_SURFACE2    = 0xFF1C1E38;
-            C_PRIMARY     = 0xFF7B6CF6;
-            C_PRIMARY_DIM = 0xFF1A1940;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFFE8E9FF;
-            C_MUTED       = 0xFF8B8AC0;
-            C_BORDER      = 0xFF2A2C4A;
-            C_DANGER      = 0xFFFF6B6B;
-            C_DANGER_BG   = 0xFF2C1515;
+            C_SURFACE     = 0xFF241E16;
+            C_SURFACE2    = 0xFF1A1410;
+            C_PRIMARY     = 0xFFD4A020;
+            C_PRIMARY_DIM = 0xFF2A1E06;
+            C_ON_PRIMARY  = 0xFF1A1410;
+            C_TEXT        = 0xFFF0EBE0;
+            C_MUTED       = 0xFF8E8878;
+            C_BORDER      = 0xFF2A1E06;
+            C_DANGER      = 0xFFE05A00;
+            C_DANGER_BG   = 0xFF2A1008;
         } else {
-            C_SURFACE     = 0xFFFFFFFF;
-            C_SURFACE2    = 0xFFEEEDFF;
-            C_PRIMARY     = 0xFF5B4AE8;
-            C_PRIMARY_DIM = 0xFFECEBFF;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFF1A1535;
-            C_MUTED       = 0xFF6B6898;
-            C_BORDER      = 0xFFD0CEEE;
-            C_DANGER      = 0xFFC0392B;
-            C_DANGER_BG   = 0xFFFFF0EE;
+            C_SURFACE     = 0xFFF7F2E8;
+            C_SURFACE2    = 0xFFEDE8DC;
+            C_PRIMARY     = 0xFFB8820A;
+            C_PRIMARY_DIM = 0xFFF5E8C0;
+            C_ON_PRIMARY  = 0xFF1C1810;
+            C_TEXT        = 0xFF1C1810;
+            C_MUTED       = 0xFF8E8878;
+            C_BORDER      = 0xFFF5E8C0;
+            C_DANGER      = 0xFFC04E00;
+            C_DANGER_BG   = 0xFFF7F2E8;
         }
     }
 
@@ -272,8 +273,33 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         Locale locale = detectLocale(text);
         tts.setLanguage(locale);
         applySpeechRate();
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "floating");
+        tts.stop();
+        String[] chunks = splitForTts(text);
+        for (int i = 0; i < chunks.length; i++) {
+            int queueMode = (i == 0) ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD;
+            tts.speak(chunks[i], queueMode, null, "floating-" + i);
+        }
         setStatus("Czytam • " + locale.toLanguageTag());
+    }
+
+    private String[] splitForTts(String text) {
+        String normalized = text == null ? "" : text.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) return new String[0];
+        java.util.List<String> chunks = new java.util.ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        String[] parts = normalized.split("(?<=[.!?;:])\\s+");
+        for (String part : parts) {
+            String t = part.trim();
+            if (t.isEmpty()) continue;
+            if (current.length() > 0 && current.length() + t.length() + 1 > MAX_TTS_CHUNK) {
+                chunks.add(current.toString());
+                current.setLength(0);
+            }
+            if (current.length() > 0) current.append(' ');
+            current.append(t);
+        }
+        if (current.length() > 0) chunks.add(current.toString());
+        return chunks.toArray(new String[0]);
     }
 
     private void openFullReader() {

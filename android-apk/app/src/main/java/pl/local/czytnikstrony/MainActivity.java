@@ -1,18 +1,23 @@
 package pl.local.czytnikstrony;
 
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.app.StatusBarManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Configuration;
+import android.database.Cursor;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
@@ -38,17 +43,27 @@ import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import com.google.mlkit.nl.translate.TranslateLanguage;
+import com.google.mlkit.nl.translate.Translation;
+import com.google.mlkit.nl.translate.Translator;
+import com.google.mlkit.nl.translate.TranslatorOptions;
+
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MainActivity extends Activity implements TextToSpeech.OnInitListener {
 
     private static final int   MAX_CHUNK = 260;
+    private static final int   MAX_EXTRACTED_TEXT = 120000;
     private static final float DEF_RATE  = 0.92f;
 
     private static final String GITHUB_OWNER = "Kacperpe";
@@ -72,9 +87,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private SeekBar      progressSeekBar;
     private Spinner      languageSpinner;
     private Spinner      voiceSpinner;
+    private Spinner      translateSpinner;
     private LinearLayout settingsPanel;
     private Button       playPauseButton;
     private Button       updateButton;
+    private long         updateDownloadId = -1L;
+    private String       latestReleaseUrl = "";
 
     // ── Stan TTS ─────────────────────────────────────────────────────────────
     private TextToSpeech         tts;
@@ -95,11 +113,34 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private String  currentTitle      = "";
     private BackgroundColorSpan currentChunkSpan;
 
+    // ── Tłumaczenie ML Kit ───────────────────────────────────────────────────
+    private boolean    translateEnabled    = false;
+    private String     translateTargetLang = "pl";
+    private Translator mlTranslator;
+
+    private static final String[] TRANSLATE_LANGS = {
+        "Wyłączone", "Polski", "Angielski", "Niemiecki", "Francuski",
+        "Hiszpański", "Włoski", "Rosyjski", "Ukraiński", "Portugalski"
+    };
+    private static final String[] TRANSLATE_CODES = {
+        "", "pl", "en", "de", "fr", "es", "it", "ru", "uk", "pt"
+    };
+
     private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(android.content.Context context, Intent intent) {
             String action = intent.getStringExtra(PlayerService.KEY_NOTIF_ACTION);
             if (action != null) handleNotifAction(action);
+        }
+    };
+
+    private final BroadcastReceiver updateDownloadReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || !DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) return;
+            long downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L);
+            if (downloadId != updateDownloadId) return;
+            handleDownloadedUpdate(downloadId);
         }
     };
 
@@ -122,8 +163,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         IntentFilter filter = new IntentFilter(PlayerService.ACTION_CONTROL_EVENT);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(controlReceiver, filter, RECEIVER_NOT_EXPORTED);
+            registerReceiver(updateDownloadReceiver,
+                new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE), RECEIVER_NOT_EXPORTED);
         } else {
             registerReceiver(controlReceiver, filter, PlayerService.INTERNAL_BROADCAST_PERMISSION, null);
+            registerReceiver(updateDownloadReceiver,
+                new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
         }
     }
 
@@ -148,7 +193,9 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     @Override
     protected void onDestroy() {
         try { unregisterReceiver(controlReceiver); } catch (Exception ignored) {}
+        try { unregisterReceiver(updateDownloadReceiver); } catch (Exception ignored) {}
         if (tts != null) { tts.stop(); tts.shutdown(); }
+        if (mlTranslator != null) { mlTranslator.close(); mlTranslator = null; }
         PlayerService.hide(this);
         if (webView != null) {
             webView.stopLoading();
@@ -171,29 +218,29 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void initColors() {
         if (isDarkMode()) {
-            C_BG          = 0xFF0C0D14;
-            C_SURFACE     = 0xFF13152A;
-            C_SURFACE2    = 0xFF1C1E38;
-            C_PRIMARY     = 0xFF7B6CF6;
-            C_PRIMARY_DIM = 0xFF1A1940;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFFE8E9FF;
-            C_MUTED       = 0xFF8B8AC0;
-            C_BORDER      = 0xFF2A2C4A;
-            C_DANGER      = 0xFFFF6B6B;
-            C_DANGER_BG   = 0xFF2C1515;
+            C_BG          = 0xFF1A1410;
+            C_SURFACE     = 0xFF241E16;
+            C_SURFACE2    = 0xFF1A1410;
+            C_PRIMARY     = 0xFFD4A020;
+            C_PRIMARY_DIM = 0xFF2A1E06;
+            C_ON_PRIMARY  = 0xFF1A1410;
+            C_TEXT        = 0xFFF0EBE0;
+            C_MUTED       = 0xFF8E8878;
+            C_BORDER      = 0xFF2A1E06;
+            C_DANGER      = 0xFFE05A00;
+            C_DANGER_BG   = 0xFF2A1008;
         } else {
-            C_BG          = 0xFFF3F2FF;
-            C_SURFACE     = 0xFFFFFFFF;
-            C_SURFACE2    = 0xFFEEEDFF;
-            C_PRIMARY     = 0xFF5B4AE8;
-            C_PRIMARY_DIM = 0xFFECEBFF;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFF1A1535;
-            C_MUTED       = 0xFF6B6898;
-            C_BORDER      = 0xFFD0CEEE;
-            C_DANGER      = 0xFFC0392B;
-            C_DANGER_BG   = 0xFFFFF0EE;
+            C_BG          = 0xFFEDE8DC;
+            C_SURFACE     = 0xFFF7F2E8;
+            C_SURFACE2    = 0xFFEDE8DC;
+            C_PRIMARY     = 0xFFB8820A;
+            C_PRIMARY_DIM = 0xFFF5E8C0;
+            C_ON_PRIMARY  = 0xFF1C1810;
+            C_TEXT        = 0xFF1C1810;
+            C_MUTED       = 0xFF8E8878;
+            C_BORDER      = 0xFFF5E8C0;
+            C_DANGER      = 0xFFC04E00;
+            C_DANGER_BG   = 0xFFF7F2E8;
         }
     }
 
@@ -426,7 +473,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         card.addView(btns, blp);
 
         clearBtn.setOnClickListener(v -> { textInput.setText(""); stopReading(); });
-        readTxtBtn.setOnClickListener(v -> speak(textInput.getText().toString()));
+        readTxtBtn.setOnClickListener(v -> maybeTranslateAndSpeak(textInput.getText().toString()));
         cursorBtn.setOnClickListener(v -> speakFromCursor());
 
         return card;
@@ -613,6 +660,19 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         voiceSpinner = styledSpinner(new String[]{});
         panel.addView(voiceSpinner, spinnerLp);
 
+        LinearLayout.LayoutParams spacedLp2 = new LinearLayout.LayoutParams(-1, -2);
+        spacedLp2.setMargins(0, dp(12), 0, 0);
+        panel.addView(sectionLabel("TŁUMACZENIE"), spacedLp2);
+        translateSpinner = styledSpinner(TRANSLATE_LANGS);
+        panel.addView(translateSpinner, spinnerLp);
+
+        TextView translateHint = new TextView(this);
+        translateHint.setText("Przy pierwszym użyciu pobierany jest model (~30 MB na parę języków).");
+        translateHint.setTextColor(C_MUTED);
+        translateHint.setTextSize(10);
+        translateHint.setPadding(dp(2), dp(4), 0, 0);
+        panel.addView(translateHint);
+
         languageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
@@ -623,6 +683,16 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 if (!allVoices.isEmpty()) refreshVoiceSpinner();
             }
             @Override public void onNothingSelected(AdapterView<?> p) { selectedLanguageCode = "auto"; }
+        });
+
+        translateSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                translateEnabled = pos > 0;
+                translateTargetLang = pos > 0 ? TRANSLATE_CODES[pos] : "pl";
+                if (mlTranslator != null) { mlTranslator.close(); mlTranslator = null; }
+            }
+            @Override public void onNothingSelected(AdapterView<?> p) { translateEnabled = false; }
         });
 
         return panel;
@@ -840,9 +910,16 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 setStatus("Nie znaleziono tekstu. Strona może wymagać logowania.");
                 return;
             }
+            int originalLength = text.length();
+            if (originalLength > MAX_EXTRACTED_TEXT) {
+                text = text.substring(0, MAX_EXTRACTED_TEXT).trim();
+                setStatus("Artykuł jest bardzo długi. Wczytano skróconą wersję.");
+            }
             textInput.setText(text);
-            setStatus("Artykuł gotowy.");
-            speak(text);
+            if (originalLength <= MAX_EXTRACTED_TEXT) {
+                setStatus("Artykuł gotowy.");
+            }
+            maybeTranslateAndSpeak(text);
         });
     }
 
@@ -866,7 +943,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         } else {
             textInput.setText(value);
             setStatus("Wczytano udostępniony tekst.");
-            speak(value);
+            maybeTranslateAndSpeak(value);
         }
     }
 
@@ -1050,7 +1127,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         int start = Math.max(0, Math.min(currentChunkStarts.get(currentChunkIndex), e.length()));
         int end   = Math.max(start, Math.min(currentChunkEnds.get(currentChunkIndex), e.length()));
         if (end <= start) return;
-        int bg = isDarkMode() ? 0xAA7B6CF6 : 0x555B4AE8;
+        int bg = isDarkMode() ? 0xAAD4A020 : 0x66B8820A;
         currentChunkSpan = new BackgroundColorSpan(bg);
         e.setSpan(currentChunkSpan, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
         textInput.setSelection(end);
@@ -1249,17 +1326,106 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 JSONObject json   = new JSONObject(sb.toString());
                 String latestTag  = json.optString("tag_name", "").replaceAll("[^0-9.]", "");
                 String releaseUrl = json.optString("html_url", "");
+                String apkUrl     = findApkAssetUrl(json);
                 String currentVer = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
                 if (!latestTag.isEmpty() && isNewerVersion(latestTag, currentVer)) {
                     runOnUiThread(() -> {
                         updateButton.setText("↑ Nowa wersja " + latestTag);
+                        latestReleaseUrl = releaseUrl;
+                        updateButton.setText("Pobierz " + latestTag);
                         updateButton.setVisibility(View.VISIBLE);
-                        updateButton.setOnClickListener(v ->
-                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl))));
+                        updateButton.setOnClickListener(v -> startUpdate(apkUrl, releaseUrl, latestTag));
                     });
                 }
             } catch (Exception ignored) {}
         }).start();
+    }
+
+    private String findApkAssetUrl(JSONObject releaseJson) {
+        JSONArray assets = releaseJson.optJSONArray("assets");
+        if (assets == null) return "";
+        for (int i = 0; i < assets.length(); i++) {
+            JSONObject asset = assets.optJSONObject(i);
+            if (asset == null) continue;
+            String name = asset.optString("name", "");
+            if (!name.toLowerCase(Locale.US).endsWith(".apk")) continue;
+            return asset.optString("browser_download_url", "");
+        }
+        return "";
+    }
+
+    private void startUpdate(String apkUrl, String releaseUrl, String version) {
+        if (apkUrl == null || apkUrl.isEmpty()) {
+            if (releaseUrl != null && !releaseUrl.isEmpty()) {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl)));
+            }
+            return;
+        }
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+            if (dm == null) {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl)));
+                return;
+            }
+            String fileName = "CzytanieStrony-v" + version + ".apk";
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(apkUrl));
+            request.setNotificationVisibility(
+                DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setTitle("Czytnik strony " + version);
+            request.setDescription("Pobieranie aktualizacji");
+            request.setMimeType("application/vnd.android.package-archive");
+            request.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, fileName);
+            updateDownloadId = dm.enqueue(request);
+            setStatus("Pobieram aktualizacje " + version + "...");
+        } catch (Exception e) {
+            if (releaseUrl != null && !releaseUrl.isEmpty()) {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl)));
+            }
+        }
+    }
+
+    private void handleDownloadedUpdate(long downloadId) {
+        DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+        if (dm == null) return;
+        DownloadManager.Query query = new DownloadManager.Query().setFilterById(downloadId);
+        try (Cursor cursor = dm.query(query)) {
+            if (cursor == null || !cursor.moveToFirst()) return;
+            int status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS));
+            if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                installDownloadedUpdate(dm, downloadId);
+                return;
+            }
+            if (status == DownloadManager.STATUS_FAILED) {
+                setStatus("Nie udalo sie pobrac aktualizacji.");
+                if (!latestReleaseUrl.isEmpty()) {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(latestReleaseUrl)));
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void installDownloadedUpdate(DownloadManager dm, long downloadId) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+            && !getPackageManager().canRequestPackageInstalls()) {
+            Intent settingsIntent = new Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + getPackageName()));
+            startActivity(settingsIntent);
+            setStatus("Zezwol na instalacje z tej aplikacji i kliknij aktualizacje ponownie.");
+            return;
+        }
+        Uri apkUri = dm.getUriForDownloadedFile(downloadId);
+        if (apkUri == null) {
+            if (!latestReleaseUrl.isEmpty()) {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(latestReleaseUrl)));
+            }
+            return;
+        }
+        Intent installIntent = new Intent(Intent.ACTION_VIEW);
+        installIntent.setDataAndType(apkUri, "application/vnd.android.package-archive");
+        installIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(installIntent);
+        setStatus("Aktualizacja pobrana. Otwieram instalator.");
     }
 
     private boolean isNewerVersion(String latest, String current) {
@@ -1283,6 +1449,97 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     // ════════════════════════════════════════════════════════════════════════
     //  Kafelek szybkich ustawień
     // ════════════════════════════════════════════════════════════════════════
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Tłumaczenie ML Kit
+    // ════════════════════════════════════════════════════════════════════════
+
+    private void maybeTranslateAndSpeak(String text) {
+        if (!translateEnabled) { speak(text); return; }
+
+        Locale detected  = detectLocale(text);
+        String sourceLang = "pl".equalsIgnoreCase(detected.getLanguage())
+            ? TranslateLanguage.POLISH : TranslateLanguage.ENGLISH;
+
+        if (sourceLang.equals(translateTargetLang)) { speak(text); return; }
+
+        TranslatorOptions options = new TranslatorOptions.Builder()
+            .setSourceLanguage(sourceLang)
+            .setTargetLanguage(translateTargetLang)
+            .build();
+
+        if (mlTranslator != null) { mlTranslator.close(); }
+        mlTranslator = Translation.getClient(options);
+
+        setStatus("Sprawdzam model tłumaczenia…");
+        mlTranslator.downloadModelIfNeeded()
+            .addOnSuccessListener(unused -> {
+                setStatus("Tłumaczę…");
+                translateChunked(text, mlTranslator);
+            })
+            .addOnFailureListener(e -> {
+                setStatus("Błąd pobierania modelu. Czytam bez tłumaczenia.");
+                speak(text);
+            });
+    }
+
+    private void translateChunked(String original, Translator translator) {
+        List<String> parts   = splitForTranslation(original);
+        List<String> results = new ArrayList<>(Collections.nCopies(parts.size(), ""));
+        AtomicInteger done   = new AtomicInteger(0);
+        AtomicBoolean failed = new AtomicBoolean(false);
+
+        for (int i = 0; i < parts.size(); i++) {
+            final int idx = i;
+            translator.translate(parts.get(i))
+                .addOnSuccessListener(translated -> {
+                    if (failed.get()) return;
+                    results.set(idx, translated);
+                    if (done.incrementAndGet() == parts.size()) {
+                        String joined = TextUtils.join("\n\n", results);
+                        runOnUiThread(() -> {
+                            textInput.setText(joined);
+                            speak(joined);
+                        });
+                    }
+                })
+                .addOnFailureListener(e -> {
+                    if (failed.compareAndSet(false, true)) {
+                        runOnUiThread(() -> {
+                            setStatus("Błąd tłumaczenia. Czytam oryginał.");
+                            speak(original);
+                        });
+                    }
+                });
+        }
+    }
+
+    private List<String> splitForTranslation(String text) {
+        final int MAX_CHUNK_SIZE = 4000;
+        List<String> chunks = new ArrayList<>();
+        String[] paragraphs = text.split("\n\n+");
+        StringBuilder current = new StringBuilder();
+
+        for (String para : paragraphs) {
+            if (current.length() > 0 && current.length() + para.length() + 2 > MAX_CHUNK_SIZE) {
+                chunks.add(current.toString().trim());
+                current.setLength(0);
+            }
+            if (current.length() > 0) current.append("\n\n");
+            current.append(para);
+
+            while (current.length() > MAX_CHUNK_SIZE) {
+                int cut = current.lastIndexOf(". ", MAX_CHUNK_SIZE);
+                if (cut < 100) cut = MAX_CHUNK_SIZE;
+                chunks.add(current.substring(0, cut + 1).trim());
+                current.delete(0, cut + 1);
+                if (current.length() > 0 && current.charAt(0) == ' ')
+                    current.deleteCharAt(0);
+            }
+        }
+        if (current.length() > 0) chunks.add(current.toString().trim());
+        return chunks.isEmpty() ? Collections.singletonList(text) : chunks;
+    }
 
     private void requestTile() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {

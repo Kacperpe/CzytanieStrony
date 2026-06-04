@@ -18,6 +18,10 @@ import android.os.Build;
 import android.os.IBinder;
 
 public class PlayerService extends Service {
+    private static final int COLOR_PRIMARY_LIGHT = 0xFFB8820A;
+    private static final int COLOR_PRIMARY_DARK = 0xFFD4A020;
+    private static final int COLOR_ICON_LIGHT = 0xFF1C1810;
+    private static final int COLOR_ICON_DARK = 0xFFF0EBE0;
 
     // Akcje wysyłane z przycisków powiadomienia do MainActivity
     static final String NOTIF_ACTION_PLAY_PAUSE = "czytnik.PLAY_PAUSE";
@@ -40,6 +44,7 @@ public class PlayerService extends Service {
     private static final String CHANNEL_ID = "czytnik_playback";
 
     private MediaSession mediaSession;
+    private static Bitmap cachedLargeIcon;
 
     // ── Publiczne API (wołane z MainActivity) ─────────────────────────────
 
@@ -51,7 +56,11 @@ public class PlayerService extends Service {
         i.putExtra(EXTRA_PLAYING, playing);
         i.putExtra(EXTRA_CHUNK,   chunk);
         i.putExtra(EXTRA_TOTAL,   total);
-        ctx.startService(i);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ctx.startForegroundService(i);
+        } else {
+            ctx.startService(i);
+        }
     }
 
     static void hide(Context ctx) {
@@ -139,7 +148,7 @@ public class PlayerService extends Service {
 
         Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_reader_tile)
-            .setLargeIcon(createLargeIcon())
+            .setLargeIcon(getLargeIcon())
             .setContentTitle(mainTitle)
             .setContentText(contentText)
             .setSubText(subText)
@@ -155,10 +164,17 @@ public class PlayerService extends Service {
             .setVisibility(Notification.VISIBILITY_PUBLIC);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder.setColor(0xFF5B4AE8).setColorized(true);
+            builder.setColor(isDarkMode() ? COLOR_PRIMARY_DARK : COLOR_PRIMARY_LIGHT).setColorized(true);
         }
 
         return builder.build();
+    }
+
+    private Bitmap getLargeIcon() {
+        if (cachedLargeIcon == null || cachedLargeIcon.isRecycled()) {
+            cachedLargeIcon = createLargeIcon();
+        }
+        return cachedLargeIcon;
     }
 
     private Bitmap createLargeIcon() {
@@ -167,11 +183,11 @@ public class PlayerService extends Service {
         Canvas canvas = new Canvas(bmp);
 
         Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bg.setColor(0xFF5B4AE8);
+        bg.setColor(isDarkMode() ? COLOR_PRIMARY_DARK : COLOR_PRIMARY_LIGHT);
         canvas.drawRoundRect(new RectF(0, 0, size, size), 28, 28, bg);
 
         Paint wave = new Paint(Paint.ANTI_ALIAS_FLAG);
-        wave.setColor(0xFFFFFFFF);
+        wave.setColor(isDarkMode() ? COLOR_ICON_DARK : COLOR_ICON_LIGHT);
         wave.setStyle(Paint.Style.STROKE);
         wave.setStrokeCap(Paint.Cap.ROUND);
 
@@ -210,5 +226,11 @@ public class PlayerService extends Service {
             || NOTIF_ACTION_PREV.equals(action)
             || NOTIF_ACTION_NEXT.equals(action)
             || NOTIF_ACTION_STOP.equals(action);
+    }
+
+    private boolean isDarkMode() {
+        int mask = getResources().getConfiguration().uiMode
+            & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return mask == android.content.res.Configuration.UI_MODE_NIGHT_YES;
     }
 }
