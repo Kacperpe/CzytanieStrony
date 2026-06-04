@@ -13,7 +13,9 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.drawable.Icon;
+import android.media.MediaMetadata;
 import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -74,7 +76,22 @@ public class PlayerService extends Service {
         super.onCreate();
         createChannel();
         mediaSession = new MediaSession(this, "CzytnikStrony");
+        // Sterowanie z ekranu blokady / przycisków słuchawek → te same akcje co przyciski powiadomienia
+        mediaSession.setCallback(new MediaSession.Callback() {
+            @Override public void onPlay()             { sendControl(NOTIF_ACTION_PLAY_PAUSE); }
+            @Override public void onPause()            { sendControl(NOTIF_ACTION_PLAY_PAUSE); }
+            @Override public void onSkipToNext()       { sendControl(NOTIF_ACTION_NEXT); }
+            @Override public void onSkipToPrevious()   { sendControl(NOTIF_ACTION_PREV); }
+            @Override public void onStop()             { sendControl(NOTIF_ACTION_STOP); }
+        });
         mediaSession.setActive(true);
+    }
+
+    private void sendControl(String action) {
+        Intent control = new Intent(ACTION_CONTROL_EVENT);
+        control.setPackage(getPackageName());
+        control.putExtra(KEY_NOTIF_ACTION, action);
+        sendBroadcast(control, INTERNAL_BROADCAST_PERMISSION);
     }
 
     @Override
@@ -85,10 +102,7 @@ public class PlayerService extends Service {
         }
         String action = intent.getAction();
         if (isControlAction(action)) {
-            Intent control = new Intent(ACTION_CONTROL_EVENT);
-            control.setPackage(getPackageName());
-            control.putExtra(KEY_NOTIF_ACTION, action);
-            sendBroadcast(control, INTERNAL_BROADCAST_PERMISSION);
+            sendControl(action);
             return START_NOT_STICKY;
         }
         if (!ACTION_UPDATE.equals(action)) {
@@ -141,6 +155,9 @@ public class PlayerService extends Service {
         String contentText = (nowPlaying != null && !nowPlaying.isEmpty()) ? nowPlaying : "Czyta…";
         String subText     = total > 0 ? "Fragment " + (chunk + 1) + " / " + total : null;
 
+        // Metadane + stan dla ekranu blokady / odtwarzacza systemowego (jak Spotify)
+        updateMediaSession(mainTitle, contentText, playing, chunk, total);
+
         Icon iconPrev      = Icon.createWithResource(this, R.drawable.ic_skip_prev);
         Icon iconPlayPause = Icon.createWithResource(this, playing ? R.drawable.ic_pause : R.drawable.ic_play);
         Icon iconNext      = Icon.createWithResource(this, R.drawable.ic_skip_next);
@@ -168,6 +185,34 @@ public class PlayerService extends Service {
         }
 
         return builder.build();
+    }
+
+    private void updateMediaSession(String title, String text, boolean playing, int chunk, int total) {
+        if (mediaSession == null) return;
+
+        MediaMetadata.Builder meta = new MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, text)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, "Czytnik strony")
+            .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, getLargeIcon());
+        if (total > 0) {
+            meta.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, total);
+            meta.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, chunk + 1);
+        }
+        mediaSession.setMetadata(meta.build());
+
+        long actions = PlaybackState.ACTION_PLAY
+            | PlaybackState.ACTION_PAUSE
+            | PlaybackState.ACTION_PLAY_PAUSE
+            | PlaybackState.ACTION_SKIP_TO_NEXT
+            | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+            | PlaybackState.ACTION_STOP;
+        PlaybackState state = new PlaybackState.Builder()
+            .setActions(actions)
+            .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                      PlaybackState.PLAYBACK_POSITION_UNKNOWN, playing ? 1f : 0f)
+            .build();
+        mediaSession.setPlaybackState(state);
     }
 
     private Bitmap getLargeIcon() {

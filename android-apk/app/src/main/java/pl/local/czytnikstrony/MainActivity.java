@@ -89,6 +89,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private Spinner      voiceSpinner;
     private Spinner      translateSpinner;
     private LinearLayout settingsPanel;
+    private ScrollView   readerScroll;
+    private ScrollView   settingsScroll;
+    private Button       navReaderBtn;
+    private Button       navSettingsBtn;
     private Button       playPauseButton;
     private Button       updateButton;
     private long         updateDownloadId = -1L;
@@ -126,6 +130,9 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         "", "pl", "en", "de", "fr", "es", "it", "ru", "uk", "pt"
     };
 
+    private static final String PREFS          = "czytnik_prefs";
+    private static final String PREF_TRANSLATE = "translate_idx";
+
     private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(android.content.Context context, Intent intent) {
@@ -153,6 +160,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         super.onCreate(savedInstanceState);
         initColors();
         buildUi();
+        restorePrefs();
         configureWebView();
         tts = new TextToSpeech(this, this);
         handleIncomingIntent(getIntent());
@@ -288,16 +296,51 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     // ════════════════════════════════════════════════════════════════════════
 
     private void buildUi() {
+        LinearLayout rootCol = new LinearLayout(this);
+        rootCol.setOrientation(LinearLayout.VERTICAL);
+        rootCol.setBackgroundColor(C_BG);
+
+        // Kontener na ekrany (przełączane dolnym paskiem)
+        FrameLayout content = new FrameLayout(this);
+
+        readerScroll   = buildReaderScreen();
+        settingsScroll = buildSettingsScreen();
+        settingsScroll.setVisibility(View.GONE);
+
+        content.addView(readerScroll,   new FrameLayout.LayoutParams(-1, -1));
+        content.addView(settingsScroll, new FrameLayout.LayoutParams(-1, -1));
+
+        rootCol.addView(content,         new LinearLayout.LayoutParams(-1, 0, 1f));
+        rootCol.addView(buildBottomNav(), new LinearLayout.LayoutParams(-1, -2));
+
+        setContentView(rootCol);
+
+        // Pasek systemu
+        getWindow().setStatusBarColor(C_BG);
+        getWindow().setNavigationBarColor(C_SURFACE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.view.WindowInsetsController wic = getWindow().getInsetsController();
+            if (wic != null) {
+                int flag = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+                int navFlag = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                int bothFlags = flag | navFlag;
+                wic.setSystemBarsAppearance(isDarkMode() ? 0 : bothFlags, bothFlags);
+            }
+        }
+    }
+
+    // ── Ekran „Czytanie" ───────────────────────────────────────────────────
+    private ScrollView buildReaderScreen() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(C_BG);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(20), dp(18), dp(32));
+        root.setPadding(dp(18), dp(20), dp(18), dp(20));
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
 
-        // ── Header ──────────────────────────────────────────────────────────
+        // ── Header ──
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -357,11 +400,32 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         // ── Player (hero) ──
         root.addView(buildPlayer(), mbottom(dp(10)));
 
-        // ── Ustawienia głosu (zwijane) ──
-        root.addView(buildSettingsToggle());
+        return scroll;
+    }
+
+    // ── Ekran „Ustawienia" ──────────────────────────────────────────────────
+    private ScrollView buildSettingsScreen() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(C_BG);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(20), dp(18), dp(20));
+        scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
+
+        TextView title = new TextView(this);
+        title.setText("Ustawienia");
+        title.setTextColor(C_TEXT);
+        title.setTextSize(28);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            title.setLetterSpacing(-0.02f);
+        }
+        root.addView(title, mbottom(dp(18)));
+
         settingsPanel = buildSettingsPanel();
-        settingsPanel.setVisibility(View.GONE);
-        root.addView(settingsPanel, mbottom(dp(10)));
+        root.addView(settingsPanel, mbottom(dp(14)));
 
         // ── Link do kafelka szybkich ustawień ──
         TextView tileLink = new TextView(this);
@@ -373,19 +437,60 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         tileLink.setOnClickListener(v -> requestTile());
         root.addView(tileLink);
 
-        setContentView(scroll);
+        return scroll;
+    }
 
-        // Pasek systemu
-        getWindow().setStatusBarColor(C_BG);
-        getWindow().setNavigationBarColor(C_BG);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.view.WindowInsetsController wic = getWindow().getInsetsController();
-            if (wic != null) {
-                int flag = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
-                int navFlag = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                int bothFlags = flag | navFlag;
-                wic.setSystemBarsAppearance(isDarkMode() ? 0 : bothFlags, bothFlags);
-            }
+    // ── Dolny pasek nawigacji ─────────────────────────────────────────────────
+    private LinearLayout buildBottomNav() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setBackgroundColor(C_SURFACE);
+        bar.setPadding(dp(8), dp(8), dp(8), dp(10));
+
+        navReaderBtn   = navButton("📖", "Czytanie");
+        navSettingsBtn = navButton("⚙", "Ustawienia");
+
+        navReaderBtn.setOnClickListener(v -> showScreen(true));
+        navSettingsBtn.setOnClickListener(v -> showScreen(false));
+
+        LinearLayout.LayoutParams half = new LinearLayout.LayoutParams(0, -2, 1f);
+        bar.addView(navReaderBtn,   half);
+        bar.addView(navSettingsBtn, half);
+
+        showScreen(true);
+        return bar;
+    }
+
+    private Button navButton(String glyph, String label) {
+        Button b = new Button(this);
+        b.setText(glyph + "\n" + label);
+        b.setAllCaps(false);
+        b.setTextSize(11);
+        b.setLineSpacing(dp(2), 1f);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(null);
+        b.setPadding(0, dp(4), 0, dp(2));
+        return b;
+    }
+
+    private void showScreen(boolean reader) {
+        if (readerScroll != null)   readerScroll.setVisibility(reader ? View.VISIBLE : View.GONE);
+        if (settingsScroll != null) settingsScroll.setVisibility(reader ? View.GONE : View.VISIBLE);
+        if (navReaderBtn != null) {
+            navReaderBtn.setTextColor(reader ? C_PRIMARY : C_MUTED);
+            navReaderBtn.setTypeface(reader ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        }
+        if (navSettingsBtn != null) {
+            navSettingsBtn.setTextColor(reader ? C_MUTED : C_PRIMARY);
+            navSettingsBtn.setTypeface(reader ? Typeface.DEFAULT : Typeface.DEFAULT_BOLD);
+        }
+    }
+
+    /** Przywraca zapamiętane ustawienia (np. wybrany język tłumaczenia). */
+    private void restorePrefs() {
+        int tIdx = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_TRANSLATE, 0);
+        if (translateSpinner != null && tIdx > 0 && tIdx < TRANSLATE_CODES.length) {
+            translateSpinner.setSelection(tIdx);  // wywoła listener i ustawi stan
         }
     }
 
@@ -691,6 +796,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 translateEnabled = pos > 0;
                 translateTargetLang = pos > 0 ? TRANSLATE_CODES[pos] : "pl";
                 if (mlTranslator != null) { mlTranslator.close(); mlTranslator = null; }
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_TRANSLATE, pos).apply();
             }
             @Override public void onNothingSelected(AdapterView<?> p) { translateEnabled = false; }
         });
