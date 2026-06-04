@@ -10,8 +10,29 @@ android {
         applicationId "pl.local.czytnikstrony"
         minSdk 23
         targetSdk 35
-        versionCode 4
-        versionName "1.0.3"
+        versionCode 5
+        versionName "1.0.4"
+    }
+
+    // Stały klucz podpisywania — dzięki temu wszystkie wydania mają ten sam
+    // podpis i aktualizacje OTA działają (Android nie zaktualizuje APK o innym podpisie).
+    signingConfigs {
+        appKey {
+            storeFile file("release.keystore")
+            storePassword "czytanie123"
+            keyAlias "czytanie"
+            keyPassword "czytanie123"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.appKey
+        }
+        release {
+            signingConfig signingConfigs.appKey
+            minifyEnabled false
+        }
     }
 
     compileOptions {
