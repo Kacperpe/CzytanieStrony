@@ -5,9 +5,12 @@ android-apk/build/
 android-apk/local.properties
 
 # Android IDE
-android-apk/.idea/caches/
+android-apk/.idea/
 *.iml
 .DS_Store
+
+# Local QA notes (not for commit)
+LOCAL_BUGS_REPORT.md
 
 # Node / Chrome ext (none here but just in case)
 node_modules/

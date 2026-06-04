@@ -21,7 +21,7 @@ public class PlayerService extends Service {
     private static final int COLOR_PRIMARY_LIGHT = 0xFFB8820A;
     private static final int COLOR_PRIMARY_DARK = 0xFFD4A020;
     private static final int COLOR_ICON_LIGHT = 0xFF1C1810;
-    private static final int COLOR_ICON_DARK = 0xFFF0EBE0;
+    private static final int COLOR_ICON_DARK = 0xFFF7F2E8;
 
     // Akcje wysyłane z przycisków powiadomienia do MainActivity
     static final String NOTIF_ACTION_PLAY_PAUSE = "czytnik.PLAY_PAUSE";

@@ -208,7 +208,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Paleta kolorów — inspiracja: Material You + odcienie szmaragdu
+    //  Paleta kolorów — Tonal Ochre (ciepła ochra / taupe / krem)
     // ════════════════════════════════════════════════════════════════════════
 
     private boolean isDarkMode() {
@@ -218,27 +218,27 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void initColors() {
         if (isDarkMode()) {
-            C_BG          = 0xFF1A1410;
-            C_SURFACE     = 0xFF241E16;
-            C_SURFACE2    = 0xFF1A1410;
+            C_BG          = 0xFF1C1810;
+            C_SURFACE     = 0xFF2A2418;
+            C_SURFACE2    = 0xFF241E16;
             C_PRIMARY     = 0xFFD4A020;
-            C_PRIMARY_DIM = 0xFF2A1E06;
-            C_ON_PRIMARY  = 0xFF1A1410;
-            C_TEXT        = 0xFFF0EBE0;
-            C_MUTED       = 0xFF8E8878;
-            C_BORDER      = 0xFF2A1E06;
+            C_PRIMARY_DIM = 0xFF3A2E10;
+            C_ON_PRIMARY  = 0xFF1C1810;
+            C_TEXT        = 0xFFF7F2E8;
+            C_MUTED       = 0xFFA89F8C;
+            C_BORDER      = 0xFF4E4840;
             C_DANGER      = 0xFFE05A00;
             C_DANGER_BG   = 0xFF2A1008;
         } else {
-            C_BG          = 0xFFEDE8DC;
-            C_SURFACE     = 0xFFF7F2E8;
+            C_BG          = 0xFFF7F2E8;
+            C_SURFACE     = 0xFFFFFFFF;
             C_SURFACE2    = 0xFFEDE8DC;
             C_PRIMARY     = 0xFFB8820A;
             C_PRIMARY_DIM = 0xFFF5E8C0;
-            C_ON_PRIMARY  = 0xFF1C1810;
+            C_ON_PRIMARY  = 0xFFFFFFFF;
             C_TEXT        = 0xFF1C1810;
             C_MUTED       = 0xFF8E8878;
-            C_BORDER      = 0xFFF5E8C0;
+            C_BORDER      = 0xFFDDD8CC;
             C_DANGER      = 0xFFC04E00;
             C_DANGER_BG   = 0xFFF7F2E8;
         }

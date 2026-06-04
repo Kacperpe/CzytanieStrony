@@ -2,8 +2,8 @@
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowBackground">#1A1410</item>
-        <item name="android:colorBackground">#1A1410</item>
+        <item name="android:windowBackground">#1C1810</item>
+        <item name="android:colorBackground">#1C1810</item>
         <item name="android:colorAccent">#D4A020</item>
         <item name="android:colorControlActivated">#D4A020</item>
         <item name="android:colorControlHighlight">#20D4A020</item>
@@ -17,7 +17,7 @@
         <item name="android:windowCloseOnTouchOutside">true</item>
         <item name="android:backgroundDimEnabled">true</item>
         <item name="android:backgroundDimAmount">0.25</item>
-        <item name="android:windowBackground">#241E16</item>
+        <item name="android:windowBackground">#2A2418</item>
         <item name="android:colorAccent">#D4A020</item>
     </style>
 </resources>
