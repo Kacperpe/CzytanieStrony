@@ -43,7 +43,12 @@ import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import com.google.mlkit.common.model.DownloadConditions;
+import com.google.mlkit.common.model.RemoteModelManager;
+import com.google.mlkit.nl.languageid.LanguageIdentification;
+import com.google.mlkit.nl.languageid.LanguageIdentifier;
 import com.google.mlkit.nl.translate.TranslateLanguage;
+import com.google.mlkit.nl.translate.TranslateRemoteModel;
 import com.google.mlkit.nl.translate.Translation;
 import com.google.mlkit.nl.translate.Translator;
 import com.google.mlkit.nl.translate.TranslatorOptions;
@@ -88,6 +93,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private Spinner      languageSpinner;
     private Spinner      voiceSpinner;
     private Spinner      translateSpinner;
+    private TextView     settingsStatus;
     private LinearLayout settingsPanel;
     private ScrollView   readerScroll;
     private ScrollView   settingsScroll;
@@ -770,6 +776,21 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         translateHint.setTextSize(10);
         translateHint.setPadding(dp(2), dp(4), 0, 0);
         panel.addView(translateHint);
+
+        // Wstępne pobranie modelu offline
+        Button downloadModelBtn = secondaryBtn("⬇  Pobierz model offline");
+        LinearLayout.LayoutParams dmLp = new LinearLayout.LayoutParams(-1, dp(46));
+        dmLp.setMargins(0, dp(10), 0, 0);
+        panel.addView(downloadModelBtn, dmLp);
+
+        settingsStatus = new TextView(this);
+        settingsStatus.setText("");
+        settingsStatus.setTextColor(C_PRIMARY);
+        settingsStatus.setTextSize(11);
+        settingsStatus.setPadding(dp(2), dp(6), 0, 0);
+        panel.addView(settingsStatus);
+
+        downloadModelBtn.setOnClickListener(v -> downloadSelectedModel(downloadModelBtn));
 
         languageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
@@ -1572,14 +1593,33 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private void maybeTranslateAndSpeak(String text) {
         if (!translateEnabled) { speak(text); return; }
 
-        Locale detected  = detectLocale(text);
-        String sourceLang = "pl".equalsIgnoreCase(detected.getLanguage())
-            ? TranslateLanguage.POLISH : TranslateLanguage.ENGLISH;
+        final String cleaned = cleanForTranslation(text);
+        if (cleaned.isEmpty()) { speak(text); return; }
 
-        if (sourceLang.equals(translateTargetLang)) { speak(text); return; }
+        // 1) Wykryj język źródłowy modelem ML Kit (a nie zgadywaniem)
+        setStatus("Wykrywam język…");
+        String sample = cleaned.length() > 4000 ? cleaned.substring(0, 4000) : cleaned;
+        LanguageIdentifier li = LanguageIdentification.getClient();
+        li.identifyLanguage(sample)
+            .addOnSuccessListener(tag -> { li.close(); startTranslation(cleaned, tag); })
+            .addOnFailureListener(e -> { li.close(); startTranslation(cleaned, null); });
+    }
+
+    /** Ustala język źródłowy (z wykrycia lub heurystyki) i uruchamia tłumaczenie. */
+    private void startTranslation(String text, String langTag) {
+        String sourceLang = null;
+        if (langTag != null && !"und".equals(langTag)) {
+            sourceLang = TranslateLanguage.fromLanguageTag(langTag);
+        }
+        if (sourceLang == null) {  // nieobsługiwany / niewykryty → heurystyka PL/EN
+            sourceLang = "pl".equalsIgnoreCase(detectLocale(text).getLanguage())
+                ? TranslateLanguage.POLISH : TranslateLanguage.ENGLISH;
+        }
+        final String src = sourceLang;
+        if (src.equals(translateTargetLang)) { speak(text); return; }
 
         TranslatorOptions options = new TranslatorOptions.Builder()
-            .setSourceLanguage(sourceLang)
+            .setSourceLanguage(src)
             .setTargetLanguage(translateTargetLang)
             .build();
 
@@ -1596,6 +1636,96 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 setStatus("Błąd pobierania modelu. Czytam bez tłumaczenia.");
                 speak(text);
             });
+    }
+
+    // ── Czyszczenie tekstu przed tłumaczeniem ─────────────────────────────────
+    private static final String[] JUNK_MARKERS = {
+        "cookie", "akceptuj", "accept all", "zaloguj", "sign in", "log in",
+        "subskryb", "subscribe", "newsletter", "udostępnij", "share this",
+        "reklama", "advertis", "menu", "nawigacj", "skip to", "przejdź do treści",
+        "wszelkie prawa", "all rights", "polityka prywatności", "privacy policy"
+    };
+
+    /** Usuwa typowe śmieci (menu/cookie/nawigacja) i normalizuje białe znaki. */
+    private String cleanForTranslation(String text) {
+        if (text == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (String raw : text.split("\n")) {
+            String line = raw.trim();
+            if (line.isEmpty()) { sb.append('\n'); continue; }
+            String low = line.toLowerCase(Locale.ROOT);
+            int words = line.split("\\s+").length;
+            // krótkie linie wyglądające jak menu/cookie/nawigacja
+            if (words <= 6 && containsAny(low, JUNK_MARKERS)) continue;
+            // linie złożone tylko z liczb/symboli
+            if (words <= 3 && line.replaceAll("[\\d\\s\\p{Punct}]", "").isEmpty()) continue;
+            sb.append(line).append('\n');
+        }
+        String out = sb.toString()
+            .replaceAll("[ \\t]{2,}", " ")
+            .replaceAll("\\n{3,}", "\n\n");
+        return out.trim();
+    }
+
+    private boolean containsAny(String haystack, String[] needles) {
+        for (String n : needles) if (haystack.contains(n)) return true;
+        return false;
+    }
+
+    // ── Wstępne pobranie modeli offline (z Ustawień) ──────────────────────────
+
+    /**
+     * Pobiera z wyprzedzeniem model tłumaczenia dla wybranego języka docelowego,
+     * dodatkowo angielski (ML Kit tłumaczy przez angielski jako pivot i to
+     * najczęstszy język źródłowy). Dzięki temu pierwsze tłumaczenie nie czeka.
+     */
+    private void downloadSelectedModel(Button btn) {
+        int pos = translateSpinner != null ? translateSpinner.getSelectedItemPosition() : 0;
+        if (pos <= 0) {
+            if (settingsStatus != null)
+                settingsStatus.setText("Najpierw wybierz język tłumaczenia powyżej.");
+            return;
+        }
+        String targetLang = TranslateLanguage.fromLanguageTag(TRANSLATE_CODES[pos]);
+        if (targetLang == null) {
+            if (settingsStatus != null)
+                settingsStatus.setText("Ten język nie jest obsługiwany offline.");
+            return;
+        }
+
+        List<String> langs = new ArrayList<>();
+        langs.add(targetLang);
+        if (!TranslateLanguage.ENGLISH.equals(targetLang)) langs.add(TranslateLanguage.ENGLISH);
+
+        final String label = TRANSLATE_LANGS[pos];
+        btn.setEnabled(false);
+        if (settingsStatus != null)
+            settingsStatus.setText("Pobieram model: " + label + " (~30 MB)…");
+
+        RemoteModelManager manager = RemoteModelManager.getInstance();
+        DownloadConditions conditions = new DownloadConditions.Builder().build();
+        AtomicInteger remaining = new AtomicInteger(langs.size());
+        AtomicBoolean failed = new AtomicBoolean(false);
+
+        for (String lang : langs) {
+            TranslateRemoteModel model = new TranslateRemoteModel.Builder(lang).build();
+            manager.download(model, conditions)
+                .addOnSuccessListener(unused -> {
+                    if (failed.get()) return;
+                    if (remaining.decrementAndGet() == 0) {
+                        btn.setEnabled(true);
+                        if (settingsStatus != null)
+                            settingsStatus.setText("✓ Model „" + label + "” gotowy — tłumaczenie offline.");
+                    }
+                })
+                .addOnFailureListener(e -> {
+                    if (failed.compareAndSet(false, true)) {
+                        btn.setEnabled(true);
+                        if (settingsStatus != null)
+                            settingsStatus.setText("Nie udało się pobrać modelu. Sprawdź połączenie i spróbuj ponownie.");
+                    }
+                });
+        }
     }
 
     private void translateChunked(String original, Translator translator) {
@@ -1629,30 +1759,34 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         }
     }
 
+    /**
+     * Dzieli tekst na paczki dla tłumacza po granicach ZDAŃ (nigdy w środku zdania).
+     * Małe akapity zostają w całości; duże są grupowane po pełnych zdaniach do ~700 znaków.
+     * ML Kit daje najlepsze wyniki na krótkich, kompletnych segmentach.
+     */
     private List<String> splitForTranslation(String text) {
-        final int MAX_CHUNK_SIZE = 4000;
+        final int TARGET = 700;
         List<String> chunks = new ArrayList<>();
-        String[] paragraphs = text.split("\n\n+");
-        StringBuilder current = new StringBuilder();
 
-        for (String para : paragraphs) {
-            if (current.length() > 0 && current.length() + para.length() + 2 > MAX_CHUNK_SIZE) {
-                chunks.add(current.toString().trim());
-                current.setLength(0);
-            }
-            if (current.length() > 0) current.append("\n\n");
-            current.append(para);
+        for (String para : text.split("\n\n+")) {
+            para = para.trim();
+            if (para.isEmpty()) continue;
+            if (para.length() <= TARGET) { chunks.add(para); continue; }
 
-            while (current.length() > MAX_CHUNK_SIZE) {
-                int cut = current.lastIndexOf(". ", MAX_CHUNK_SIZE);
-                if (cut < 100) cut = MAX_CHUNK_SIZE;
-                chunks.add(current.substring(0, cut + 1).trim());
-                current.delete(0, cut + 1);
-                if (current.length() > 0 && current.charAt(0) == ' ')
-                    current.deleteCharAt(0);
+            // duży akapit → grupuj całe zdania
+            StringBuilder cur = new StringBuilder();
+            for (String sentence : para.split("(?<=[.!?…])\\s+")) {
+                String s = sentence.trim();
+                if (s.isEmpty()) continue;
+                if (cur.length() > 0 && cur.length() + s.length() + 1 > TARGET) {
+                    chunks.add(cur.toString());
+                    cur.setLength(0);
+                }
+                if (cur.length() > 0) cur.append(' ');
+                cur.append(s);
             }
+            if (cur.length() > 0) chunks.add(cur.toString());
         }
-        if (current.length() > 0) chunks.add(current.toString().trim());
         return chunks.isEmpty() ? Collections.singletonList(text) : chunks;
     }
 

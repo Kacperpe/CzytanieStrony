@@ -10,8 +10,8 @@ android {
         applicationId "pl.local.czytnikstrony"
         minSdk 23
         targetSdk 35
-        versionCode 7
-        versionName "1.0.6"
+        versionCode 8
+        versionName "1.0.7"
     }
 
     // Stały klucz podpisywania — dzięki temu wszystkie wydania mają ten sam
@@ -43,4 +43,5 @@ android {
 
 dependencies {
     implementation 'com.google.mlkit:translate:17.0.3'
+    implementation 'com.google.mlkit:language-id:17.0.6'
 }
