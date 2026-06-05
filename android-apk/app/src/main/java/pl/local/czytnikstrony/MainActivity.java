@@ -94,6 +94,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private Spinner      voiceSpinner;
     private Spinner      translateSpinner;
     private TextView     settingsStatus;
+    private Button       favVoiceBtn;
     private LinearLayout settingsPanel;
     private ScrollView   readerScroll;
     private ScrollView   settingsScroll;
@@ -109,8 +110,18 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private final List<Voice>    allVoices   = new ArrayList<>();
     private final List<Voice>    voices      = new ArrayList<>();
     private final List<String>   voiceLabels = new ArrayList<>();
+    private final java.util.Map<String,String> voiceDisplayNames = new java.util.HashMap<>();
+    private final Set<String>    favoriteVoices = new java.util.HashSet<>();
     private String  selectedLanguageCode = "auto";
     private String  selectedVoiceName    = "";
+
+    // Pule wymyślonych imion lektorów — przydzielane kolejnym realnym głosom.
+    private static final String[] PL_NAMES = {
+        "Ola", "Marek", "Kasia", "Piotr", "Zofia", "Jakub", "Ania", "Tomek", "Ewa", "Bartek"
+    };
+    private static final String[] EN_NAMES = {
+        "Emma", "James", "Olivia", "Liam", "Sophie", "Noah", "Grace", "Oliver", "Mia", "Henry"
+    };
     private float   speechRate           = DEF_RATE;
     private boolean ttsReady       = false;
     private boolean readingQueue    = false;
@@ -138,6 +149,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private static final String PREFS          = "czytnik_prefs";
     private static final String PREF_TRANSLATE = "translate_idx";
+    private static final String PREF_FAVORITES = "fav_voices";
 
     private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
         @Override
@@ -294,7 +306,17 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         });
 
         loadVoices();
-        setStatus("Gotowy");
+        setStatus(voiceCountSummary());
+    }
+
+    private String voiceCountSummary() {
+        int pl = 0, en = 0;
+        for (Voice v : allVoices) {
+            String lang = v.getLocale().getLanguage();
+            if ("pl".equalsIgnoreCase(lang)) pl++;
+            else if ("en".equalsIgnoreCase(lang)) en++;
+        }
+        return "Gotowy  •  głosy PL: " + pl + ", EN: " + en;
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -494,10 +516,13 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     /** Przywraca zapamiętane ustawienia (np. wybrany język tłumaczenia). */
     private void restorePrefs() {
-        int tIdx = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_TRANSLATE, 0);
+        android.content.SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+        int tIdx = sp.getInt(PREF_TRANSLATE, 0);
         if (translateSpinner != null && tIdx > 0 && tIdx < TRANSLATE_CODES.length) {
             translateSpinner.setSelection(tIdx);  // wywoła listener i ustawi stan
         }
+        Set<String> fav = sp.getStringSet(PREF_FAVORITES, null);
+        if (fav != null) { favoriteVoices.clear(); favoriteVoices.addAll(fav); }
     }
 
     // ── Karta URL ────────────────────────────────────────────────────────────
@@ -536,10 +561,24 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         lbp.setMargins(0, dp(8), 0, 0);
         card.addView(loadingBar, lbp);
 
-        readBtn.setOnClickListener(v -> extractAndRead());
-        urlInput.setOnEditorActionListener((v, actionId, event) -> { extractAndRead(); return true; });
+        readBtn.setOnClickListener(v -> readSmart());
+        urlInput.setOnEditorActionListener((v, actionId, event) -> { readSmart(); return true; });
 
         return card;
+    }
+
+    /**
+     * Jeden przycisk „Czytaj": jeśli w polu adresu jest URL — pobiera stronę,
+     * wyciąga artykuł i zaczyna czytać; jeśli pole adresu jest puste — czyta
+     * tekst z pola tekstowego.
+     */
+    private void readSmart() {
+        String url = urlInput != null ? urlInput.getText().toString().trim() : "";
+        if (!url.isEmpty()) {
+            extractAndRead();
+        } else {
+            maybeTranslateAndSpeak(textInput != null ? textInput.getText().toString() : "");
+        }
     }
 
     // ── Karta tekstu ─────────────────────────────────────────────────────────
@@ -578,13 +617,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         blp.setMargins(0, dp(8), 0, 0);
 
         Button cursorBtn  = secondaryBtn("Od kursora");
-        Button readTxtBtn = primaryBtn("Czytaj tekst");
-        btns.addView(cursorBtn,  actionBtnLp());
-        btns.addView(readTxtBtn, actionBtnLp());
+        btns.addView(cursorBtn, actionBtnLp());
         card.addView(btns, blp);
 
         clearBtn.setOnClickListener(v -> { textInput.setText(""); stopReading(); });
-        readTxtBtn.setOnClickListener(v -> maybeTranslateAndSpeak(textInput.getText().toString()));
         cursorBtn.setOnClickListener(v -> speakFromCursor());
 
         return card;
@@ -652,11 +688,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         Button nextBtn = controlBtn("⏭");
         Button stopBtn = stopButton();
 
-        // Każdy przycisk w komórce z wagą 1 → idealnie równe odstępy i pozycje
-        controls.addView(ctrlCell(prevBtn));
-        controls.addView(ctrlCell(playPauseButton));
-        controls.addView(ctrlCell(nextBtn));
-        controls.addView(ctrlCell(stopBtn));
+        // Zwarta grupa wyśrodkowana na środku panelu, z równymi odstępami
+        controls.addView(prevBtn,         ctrlLp());
+        controls.addView(playPauseButton, ctrlLp());
+        controls.addView(nextBtn,         ctrlLp());
+        controls.addView(stopBtn,         ctrlLp());
         card.addView(controls, clp);
 
         // Tempo
@@ -764,6 +800,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         voiceSpinner = styledSpinner(new String[]{});
         panel.addView(voiceSpinner, spinnerLp);
 
+        favVoiceBtn = secondaryBtn("☆ Oznacz jako ulubiony");
+        LinearLayout.LayoutParams favLp = new LinearLayout.LayoutParams(-1, dp(44));
+        favLp.setMargins(0, dp(8), 0, 0);
+        panel.addView(favVoiceBtn, favLp);
+        favVoiceBtn.setOnClickListener(v -> toggleFavoriteVoice());
+
         LinearLayout.LayoutParams spacedLp2 = new LinearLayout.LayoutParams(-1, -2);
         spacedLp2.setMargins(0, dp(12), 0, 0);
         panel.addView(sectionLabel("TŁUMACZENIE"), spacedLp2);
@@ -868,14 +910,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     /** Rozmiar (średnica) każdego przycisku sterowania — jednakowy dla wszystkich. */
     private static final int CTRL_SIZE = 60;
 
-    /** Owija przycisk w komórkę z wagą 1, wyśrodkowując go — równe odstępy i symetria. */
-    private FrameLayout ctrlCell(Button btn) {
-        FrameLayout cell = new FrameLayout(this);
-        cell.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
-        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(dp(CTRL_SIZE), dp(CTRL_SIZE));
-        blp.gravity = Gravity.CENTER;
-        cell.addView(btn, blp);
-        return cell;
+    /** Jednakowy rozmiar każdego guzika sterowania + równe boczne odstępy (grupa wyśrodkowana). */
+    private LinearLayout.LayoutParams ctrlLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(CTRL_SIZE), dp(CTRL_SIZE));
+        lp.setMargins(dp(8), 0, dp(8), 0);
+        return lp;
     }
 
     private Button controlBtn(String text) {
@@ -1283,23 +1322,62 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 if (isSupportedLang(v)) allVoices.add(v);
             }
         }
+        assignDisplayNames();
         refreshVoiceSpinner();
+    }
+
+    /** Przydziela każdemu realnemu głosowi czytelne imię (np. „PL · Ola") wg kolejności. */
+    private void assignDisplayNames() {
+        voiceDisplayNames.clear();
+        int pl = 0, en = 0;
+        for (Voice v : allVoices) {
+            String lang = v.getLocale().getLanguage();
+            String name;
+            if ("pl".equalsIgnoreCase(lang)) {
+                name = "PL · " + pickName(PL_NAMES, pl);
+                pl++;
+            } else {
+                name = "EN · " + pickName(EN_NAMES, en);
+                en++;
+            }
+            voiceDisplayNames.put(v.getName(), name);
+        }
+    }
+
+    /** Imię z puli; po wyczerpaniu puli dokleja numer, żeby nazwy były unikalne. */
+    private String pickName(String[] pool, int idx) {
+        String base = pool[idx % pool.length];
+        return idx < pool.length ? base : base + " " + (idx + 1);
+    }
+
+    private String displayName(Voice v) {
+        String n = voiceDisplayNames.get(v.getName());
+        return n != null ? n : v.getName();
     }
 
     private void refreshVoiceSpinner() {
         voices.clear();
         voiceLabels.clear();
         voiceLabels.add("Automatycznie");
+
+        // Głosy pasujące do wybranego języka
+        List<Voice> filtered = new ArrayList<>();
         for (Voice v : allVoices) {
             String lang = v.getLocale().getLanguage();
             boolean include = "auto".equals(selectedLanguageCode)
                 || ("pl".equals(selectedLanguageCode) && "pl".equalsIgnoreCase(lang))
                 || ("en".equals(selectedLanguageCode) && "en".equalsIgnoreCase(lang));
-            if (include) {
-                voices.add(v);
-                voiceLabels.add(v.getName() + " (" + v.getLocale().toLanguageTag() + ")");
-            }
+            if (include) filtered.add(v);
         }
+        // Ulubieni (★) na samą górę, reszta poniżej — kolejność w obrębie grup zachowana
+        for (Voice v : filtered) if (favoriteVoices.contains(v.getName())) voices.add(v);
+        for (Voice v : filtered) if (!favoriteVoices.contains(v.getName())) voices.add(v);
+
+        for (Voice v : voices) {
+            boolean fav = favoriteVoices.contains(v.getName());
+            voiceLabels.add((fav ? "★ " : "") + displayName(v));
+        }
+
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
             android.R.layout.simple_spinner_item, voiceLabels);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -1308,6 +1386,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         voiceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                updateStarButton();
                 Voice picked = pos > 0 ? voices.get(pos - 1) : null;
                 String newName = picked != null ? picked.getName() : "";
                 if (newName.equals(selectedVoiceName)) return;
@@ -1327,6 +1406,41 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             }
             @Override public void onNothingSelected(AdapterView<?> p) { selectedVoiceName = ""; }
         });
+
+        // Utrzymaj zaznaczenie na tym samym lektorze po przesortowaniu
+        if (!selectedVoiceName.isEmpty()) {
+            for (int i = 0; i < voices.size(); i++) {
+                if (voices.get(i).getName().equals(selectedVoiceName)) {
+                    voiceSpinner.setSelection(i + 1);
+                    break;
+                }
+            }
+        }
+        updateStarButton();
+    }
+
+    /** Przełącza ulubionego (★) dla aktualnie wybranego lektora i zapisuje. */
+    private void toggleFavoriteVoice() {
+        int pos = voiceSpinner != null ? voiceSpinner.getSelectedItemPosition() : 0;
+        if (pos <= 0 || pos - 1 >= voices.size()) {
+            setStatus("Wybierz najpierw konkretnego lektora (nie Automatycznie).");
+            return;
+        }
+        String name = voices.get(pos - 1).getName();
+        if (favoriteVoices.contains(name)) favoriteVoices.remove(name);
+        else                               favoriteVoices.add(name);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putStringSet(PREF_FAVORITES, new java.util.HashSet<>(favoriteVoices)).apply();
+        selectedVoiceName = name;   // zostań na tym samym lektorze
+        refreshVoiceSpinner();      // przesortuje i odświeży ★
+    }
+
+    private void updateStarButton() {
+        if (favVoiceBtn == null || voiceSpinner == null) return;
+        int pos = voiceSpinner.getSelectedItemPosition();
+        boolean isFav = pos > 0 && pos - 1 < voices.size()
+            && favoriteVoices.contains(voices.get(pos - 1).getName());
+        favVoiceBtn.setText(isFav ? "★ Ulubiony (kliknij, by usunąć)" : "☆ Oznacz jako ulubiony");
     }
 
     private boolean isSupportedLang(Voice v) {
