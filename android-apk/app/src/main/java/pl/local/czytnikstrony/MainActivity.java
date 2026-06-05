@@ -69,7 +69,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private static final int   MAX_CHUNK = 260;
     private static final int   MAX_EXTRACTED_TEXT = 120000;
-    private static final float DEF_RATE  = 0.92f;
+    private static final float DEF_RATE      = 1.00f;
+    private static final float RATE_MIN      = 0.50f;
+    private static final float RATE_STEP     = 0.25f;
+    private static final int   RATE_STEPS    = 6;   // 0.50 · 0.75 · 1.00 · 1.25 · 1.50 · 1.75 · 2.00
 
     private static final String GITHUB_OWNER = "Kacperpe";
     private static final String GITHUB_REPO  = "CzytanieStrony";
@@ -710,8 +713,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         rateRow.addView(rateLabel);
 
         rateSeekBar = new SeekBar(this);
-        rateSeekBar.setMax(120);
-        rateSeekBar.setProgress(32);
+        rateSeekBar.setMax(RATE_STEPS);
+        rateSeekBar.setProgress(rateToProgress(DEF_RATE));
         rateRow.addView(rateSeekBar, new LinearLayout.LayoutParams(0, -2, 1f));
 
         rateText = new TextView(this);
@@ -745,7 +748,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         rateSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-                speechRate = 0.6f + (progress / 100f);
+                speechRate = progressToRate(progress);
                 rateText.setText(String.format(Locale.US, "%.2fx", speechRate));
                 applySpeechRate();
             }
@@ -1210,6 +1213,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (voice != null) tts.setVoice(voice);
         else               tts.setLanguage(locale);
         tts.setSpeechRate(speechRate);
+    }
+
+    private float progressToRate(int p) { return RATE_MIN + p * RATE_STEP; }
+    private int   rateToProgress(float r) {
+        return Math.max(0, Math.min(RATE_STEPS, Math.round((r - RATE_MIN) / RATE_STEP)));
     }
 
     private void applySpeechRate() {
