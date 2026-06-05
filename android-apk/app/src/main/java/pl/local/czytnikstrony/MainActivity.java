@@ -634,30 +634,23 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         progRow.addView(progressText, ptlp);
         card.addView(progRow);
 
-        // Przyciski sterowania
+        // Przyciski sterowania — cztery jednakowe, równo rozłożone (symetryczne)
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-        clp.setMargins(0, dp(14), 0, 0);
+        clp.setMargins(0, dp(16), 0, 0);
 
         Button prevBtn = controlBtn("⏮");
         playPauseButton = playPauseBtn();
         Button nextBtn = controlBtn("⏭");
         Button stopBtn = stopButton();
 
-        LinearLayout.LayoutParams ctrlLp = new LinearLayout.LayoutParams(dp(50), dp(50));
-        ctrlLp.gravity = Gravity.CENTER_VERTICAL;
-        ctrlLp.setMargins(dp(4), 0, dp(4), 0);
-
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(76), dp(76));
-        playLp.gravity = Gravity.CENTER_VERTICAL;
-        playLp.setMargins(dp(10), 0, dp(10), 0);
-
-        controls.addView(prevBtn,         ctrlLp);
-        controls.addView(playPauseButton, playLp);
-        controls.addView(nextBtn,         ctrlLp);
-        controls.addView(stopBtn,         ctrlLp);
+        // Każdy przycisk w komórce z wagą 1 → idealnie równe odstępy i pozycje
+        controls.addView(ctrlCell(prevBtn));
+        controls.addView(ctrlCell(playPauseButton));
+        controls.addView(ctrlCell(nextBtn));
+        controls.addView(ctrlCell(stopBtn));
         card.addView(controls, clp);
 
         // Tempo
@@ -851,36 +844,52 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return lp;
     }
 
+    /** Rozmiar (średnica) każdego przycisku sterowania — jednakowy dla wszystkich. */
+    private static final int CTRL_SIZE = 60;
+
+    /** Owija przycisk w komórkę z wagą 1, wyśrodkowując go — równe odstępy i symetria. */
+    private FrameLayout ctrlCell(Button btn) {
+        FrameLayout cell = new FrameLayout(this);
+        cell.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(dp(CTRL_SIZE), dp(CTRL_SIZE));
+        blp.gravity = Gravity.CENTER;
+        cell.addView(btn, blp);
+        return cell;
+    }
+
     private Button controlBtn(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextSize(20);
+        btn.setTextSize(22);
         btn.setAllCaps(false);
         btn.setTextColor(C_PRIMARY);
-        btn.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, isDarkMode() ? C_BORDER : 0, 25));
+        btn.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, C_BORDER, CTRL_SIZE / 2));
         btn.setPadding(0, 0, 0, 0);
+        btn.setStateListAnimator(null);
         return btn;
     }
 
     private Button playPauseBtn() {
         Button btn = new Button(this);
         btn.setText("▶");
-        btn.setTextSize(30);
+        btn.setTextSize(26);
         btn.setAllCaps(false);
         btn.setTextColor(C_ON_PRIMARY);
-        btn.setBackground(mkRound(C_PRIMARY, 0, 38));
+        btn.setBackground(mkRound(C_PRIMARY, 0, CTRL_SIZE / 2));
         btn.setPadding(0, 0, 0, 0);
+        btn.setStateListAnimator(null);
         return btn;
     }
 
     private Button stopButton() {
         Button btn = new Button(this);
         btn.setText("⏹");
-        btn.setTextSize(18);
+        btn.setTextSize(20);
         btn.setAllCaps(false);
         btn.setTextColor(C_DANGER);
-        btn.setBackground(mkRound(C_DANGER_BG, 0, 25));
+        btn.setBackground(mkRound(C_DANGER_BG, C_DANGER, CTRL_SIZE / 2));
         btn.setPadding(0, 0, 0, 0);
+        btn.setStateListAnimator(null);
         return btn;
     }
 
