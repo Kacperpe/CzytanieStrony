@@ -66,9 +66,11 @@ import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -180,6 +182,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private LinearLayout libraryCard;
     private LinearLayout libraryList;
+    private LinearLayout storageFileList;
     private TextView     storageUsageText;
     private Spinner      retentionSpinner;
     private Spinner      storageCapSpinner;
@@ -1657,6 +1660,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         storageUsageText.setPadding(dp(2), dp(10), 0, 0);
         panel.addView(storageUsageText);
 
+        LinearLayout.LayoutParams listLabelLp = new LinearLayout.LayoutParams(-1, -2);
+        listLabelLp.setMargins(0, dp(14), 0, 0);
+        panel.addView(sectionLabel("TWOJE PLIKI"), listLabelLp);
+
+        storageFileList = new LinearLayout(this);
+        storageFileList.setOrientation(LinearLayout.VERTICAL);
+        panel.addView(storageFileList);
+
         Button clearBtn = secondaryBtn("🗑  Wyczyść zapisane pliki");
         LinearLayout.LayoutParams cbLp = new LinearLayout.LayoutParams(-1, dp(46));
         cbLp.setMargins(0, dp(10), 0, 0);
@@ -1692,12 +1703,122 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     private void updateStorageUsage() {
-        if (storageUsageText == null) return;
         List<FileLibrary.Item> items = FileLibrary.list(this);
         long used = 0;
         for (FileLibrary.Item it : items) used += it.sizeBytes;
-        storageUsageText.setText("Zajęte: " + fmtSize(used) + " z " + fmtSize(storageCapBytes())
-            + "   •   plików: " + items.size());
+
+        if (storageUsageText != null)
+            storageUsageText.setText("Zajęte: " + fmtSize(used) + " z " + fmtSize(storageCapBytes())
+                + "   •   plików: " + items.size());
+
+        if (storageFileList == null) return;
+        storageFileList.removeAllViews();
+        if (items.isEmpty()) {
+            TextView empty = new TextView(this);
+            empty.setText("Brak zapisanych plików. Wczytaj plik na ekranie „Czytanie”.");
+            empty.setTextColor(C_MUTED);
+            empty.setTextSize(11);
+            empty.setPadding(dp(2), dp(8), 0, 0);
+            storageFileList.addView(empty);
+            return;
+        }
+        for (FileLibrary.Item it : items) storageFileList.addView(buildStorageRow(it));
+    }
+
+    /** Wiersz szczegółowy w Ustawieniach: nazwa, rozmiar, kiedy zniknie, otwórz/usuń. */
+    private View buildStorageRow(final FileLibrary.Item item) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        row.setPadding(dp(12), dp(10), dp(8), dp(10));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+        rlp.setMargins(0, dp(6), 0, 0);
+        row.setLayoutParams(rlp);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText(item.title);
+        title.setTextColor(C_TEXT);
+        title.setTextSize(13);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        col.addView(title);
+
+        TextView size = new TextView(this);
+        size.setText("Rozmiar: " + fmtSize(item.sizeBytes)
+            + (item.totalChunks > 0 ? "   •   postęp " + item.percent() + "%" : ""));
+        size.setTextColor(C_MUTED);
+        size.setTextSize(11);
+        LinearLayout.LayoutParams szlp = new LinearLayout.LayoutParams(-1, -2);
+        szlp.setMargins(0, dp(2), 0, 0);
+        col.addView(size, szlp);
+
+        TextView del = new TextView(this);
+        del.setText(deletionInfo(item));
+        del.setTextColor(item.isForever() ? C_PRIMARY : C_MUTED);
+        del.setTextSize(11);
+        col.addView(del);
+
+        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        // Chip retencji (zmiana czasu przechowywania dla tego pliku)
+        Button keep = new Button(this);
+        keep.setText(retentionShort(item.retentionDays));
+        keep.setAllCaps(false);
+        keep.setTextSize(11);
+        keep.setTextColor(item.isForever() ? C_PRIMARY : C_MUTED);
+        keep.setTypeface(Typeface.DEFAULT_BOLD);
+        keep.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, C_BORDER, 14));
+        keep.setPadding(dp(10), 0, dp(10), 0);
+        keep.setStateListAnimator(null);
+        LinearLayout.LayoutParams klp = new LinearLayout.LayoutParams(-2, dp(34));
+        klp.setMargins(0, 0, dp(4), 0);
+        row.addView(keep, klp);
+
+        Button del2 = new Button(this);
+        del2.setText("✕");
+        del2.setTextSize(15);
+        del2.setAllCaps(false);
+        del2.setTextColor(C_MUTED);
+        del2.setBackground(null);
+        del2.setPadding(dp(8), 0, dp(8), 0);
+        del2.setMinWidth(dp(40));
+        del2.setMinimumWidth(dp(40));
+        row.addView(del2, new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+        col.setOnClickListener(v -> resumeLibraryItem(item));   // otwórz / odtwórz
+        keep.setOnClickListener(v -> chooseRetention(item));
+        del2.setOnClickListener(v -> {
+            FileLibrary.remove(this, item.id);
+            if (item.id.equals(currentLibraryId)) currentLibraryId = "";
+            refreshLibraryUi();
+        });
+        return row;
+    }
+
+    /** Tekst „kiedy plik zostanie usunięty" (lub że jest trzymany na zawsze). */
+    private String deletionInfo(FileLibrary.Item item) {
+        if (item.isForever()) return "📌 Nie zostanie usunięty (na zawsze)";
+        long deleteAt = item.lastOpenedAt + item.retentionDays * 24L * 3600_000L;
+        long remain = deleteAt - System.currentTimeMillis();
+        String when;
+        if (remain <= 0) {
+            when = "wkrótce";
+        } else {
+            long hours = remain / 3600_000L;
+            if (hours < 1)       when = "za <1 godz.";
+            else if (hours < 24) when = "za " + hours + (hours == 1 ? " godz." : " godz.");
+            else {
+                long days = hours / 24;
+                when = "za " + days + (days == 1 ? " dzień" : " dni");
+            }
+        }
+        SimpleDateFormat fmt = new SimpleDateFormat("d MMM, HH:mm", new Locale("pl", "PL"));
+        return "Usunięcie " + when + "  (" + fmt.format(new Date(deleteAt)) + ")";
     }
 
     private String fmtSize(long bytes) {
