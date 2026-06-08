@@ -9,6 +9,12 @@ Aplikacja czyta na głos strony WWW, wklejony tekst, a także **całe pliki**
 wczytane z telefonu — `txt`, `md`, `pdf`, `docx`, `odt`, `rtf`, `html`
 i inne pliki tekstowe (przycisk „📄 Wczytaj plik").
 
+Wczytane pliki są **zapamiętywane na urządzeniu** wraz z miejscem, w którym
+skończyłeś słuchać — możesz w każdej chwili wrócić i wznowić od tego momentu
+(sekcja „Ostatnie pliki"). W ustawieniach wybierasz, jak długo pliki są
+przechowywane (1 / 2 / 3 / 7 dni) oraz limit pamięci (0,5 / 1 / 2 / 5 GB) —
+starsze są usuwane automatycznie.
+
 ---
 
 ## Pobieranie APK na Androida

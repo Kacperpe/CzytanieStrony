@@ -167,6 +167,30 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private static final String PREF_TRANSLATE = "translate_idx";
     private static final String PREF_FAVORITES = "fav_voices";
 
+    // ── Biblioteka plików (pamięć podręczna z pozycją wznowienia) ─────────────
+    private static final String PREF_RETENTION   = "retention_idx";
+    private static final String PREF_STORAGE_CAP = "storage_cap_idx";
+    private static final int[]    RETENTION_DAYS   = { 1, 2, 3, 7 };
+    private static final String[] RETENTION_LABELS = { "1 dzień", "2 dni", "3 dni", "7 dni" };
+    private static final long[]   STORAGE_CAPS     = {
+        512L * 1024 * 1024, 1024L * 1024 * 1024, 2L * 1024 * 1024 * 1024, 5L * 1024 * 1024 * 1024
+    };
+    private static final String[] STORAGE_LABELS   = { "0,5 GB", "1 GB", "2 GB", "5 GB" };
+
+    private LinearLayout libraryCard;
+    private LinearLayout libraryList;
+    private TextView     storageUsageText;
+    private Spinner      retentionSpinner;
+    private Spinner      storageCapSpinner;
+
+    // Bieżący plik z biblioteki + przekazywanie stanu do speak()
+    private String  currentLibraryId    = "";
+    private String  pendingLibraryTitle = null;   // import → zapis do biblioteki
+    private String  pendingResumeId     = null;   // wznowienie z biblioteki (bez ponownego zapisu)
+    private String  pendingResumeTitle  = null;
+    private int     pendingStartChunk   = 0;
+    private int     lastPersistedChunk  = -1;
+
     private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(android.content.Context context, Intent intent) {
@@ -196,6 +220,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         buildUi();
         restorePrefs();
         configureWebView();
+        FileLibrary.enforce(this, retentionDays(), storageCapBytes());
+        refreshLibraryUi();
         tts = new TextToSpeech(this, this);
         handleIncomingIntent(getIntent());
         checkForUpdate();
@@ -212,6 +238,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             registerReceiver(updateDownloadReceiver,
                 new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE));
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshLibraryUi();
     }
 
     @Override
@@ -444,6 +476,9 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         // ── Player (hero) ──
         root.addView(buildPlayer(), mbottom(dp(10)));
 
+        // ── Biblioteka ostatnich plików ──
+        root.addView(buildLibraryCard(), mbottom(dp(10)));
+
         return scroll;
     }
 
@@ -470,6 +505,9 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
         settingsPanel = buildSettingsPanel();
         root.addView(settingsPanel, mbottom(dp(14)));
+
+        // ── Panel pamięci plików ──
+        root.addView(buildStoragePanel(), mbottom(dp(14)));
 
         // ── Link do kafelka szybkich ustawień ──
         TextView tileLink = new TextView(this);
@@ -539,6 +577,21 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         }
         Set<String> fav = sp.getStringSet(PREF_FAVORITES, null);
         if (fav != null) { favoriteVoices.clear(); favoriteVoices.addAll(fav); }
+
+        if (retentionSpinner != null)
+            retentionSpinner.setSelection(sp.getInt(PREF_RETENTION, 2));     // domyślnie 3 dni
+        if (storageCapSpinner != null)
+            storageCapSpinner.setSelection(sp.getInt(PREF_STORAGE_CAP, 1));  // domyślnie 1 GB
+    }
+
+    private int retentionDays() {
+        int idx = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_RETENTION, 2);
+        return RETENTION_DAYS[Math.max(0, Math.min(idx, RETENTION_DAYS.length - 1))];
+    }
+
+    private long storageCapBytes() {
+        int idx = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_STORAGE_CAP, 1);
+        return STORAGE_CAPS[Math.max(0, Math.min(idx, STORAGE_CAPS.length - 1))];
     }
 
     // ── Karta URL ────────────────────────────────────────────────────────────
@@ -1203,6 +1256,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                     setStatus("Wczytano: " + fileName);
                 }
                 textInput.setText(t);
+                pendingLibraryTitle = fileName;   // speak() zapisze do biblioteki
                 maybeTranslateAndSpeak(t);
             });
         }).start();
@@ -1413,6 +1467,207 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     // ════════════════════════════════════════════════════════════════════════
+    //  Biblioteka plików — UI (ekran Czytanie) i panel pamięci (Ustawienia)
+    // ════════════════════════════════════════════════════════════════════════
+
+    private LinearLayout buildLibraryCard() {
+        libraryCard = surfaceCard();
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+        topRow.addView(sectionLabel("OSTATNIE PLIKI"), new LinearLayout.LayoutParams(0, -2, 1f));
+        libraryCard.addView(topRow, mbottom(dp(4)));
+
+        libraryList = new LinearLayout(this);
+        libraryList.setOrientation(LinearLayout.VERTICAL);
+        libraryCard.addView(libraryList);
+
+        libraryCard.setVisibility(View.GONE);   // ukryta dopóki nie ma plików
+        return libraryCard;
+    }
+
+    /** Odświeża listę zapamiętanych plików na ekranie czytania. */
+    private void refreshLibraryUi() {
+        if (libraryList == null) return;
+        List<FileLibrary.Item> items = FileLibrary.list(this);
+        libraryList.removeAllViews();
+        if (libraryCard != null)
+            libraryCard.setVisibility(items.isEmpty() ? View.GONE : View.VISIBLE);
+        for (FileLibrary.Item it : items) libraryList.addView(buildLibraryRow(it));
+        updateStorageUsage();
+    }
+
+    private View buildLibraryRow(final FileLibrary.Item item) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        row.setPadding(dp(12), dp(10), dp(8), dp(10));
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
+        rlp.setMargins(0, dp(6), 0, 0);
+        row.setLayoutParams(rlp);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText(item.title);
+        title.setTextColor(C_TEXT);
+        title.setTextSize(13);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        col.addView(title);
+
+        TextView meta = new TextView(this);
+        int pct = item.percent();
+        String state = item.totalChunks <= 0
+            ? "gotowy do odtwarzania"
+            : (pct >= 99 ? "ukończono" : "wznów od " + pct + "%  •  fragment "
+                + (item.resumeChunk + 1) + "/" + item.totalChunks);
+        meta.setText("▶  " + state + "   ·   " + fmtSize(item.sizeBytes));
+        meta.setTextColor(C_MUTED);
+        meta.setTextSize(11);
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, -2);
+        mlp.setMargins(0, dp(2), 0, 0);
+        col.addView(meta, mlp);
+
+        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        Button del = new Button(this);
+        del.setText("✕");
+        del.setTextSize(15);
+        del.setAllCaps(false);
+        del.setTextColor(C_MUTED);
+        del.setBackground(null);
+        del.setPadding(dp(8), 0, dp(8), 0);
+        del.setMinWidth(dp(40));
+        del.setMinimumWidth(dp(40));
+        row.addView(del, new LinearLayout.LayoutParams(dp(40), dp(40)));
+
+        col.setOnClickListener(v -> resumeLibraryItem(item));
+        del.setOnClickListener(v -> {
+            FileLibrary.remove(this, item.id);
+            if (item.id.equals(currentLibraryId)) currentLibraryId = "";
+            refreshLibraryUi();
+        });
+        return row;
+    }
+
+    /** Wczytuje zapamiętany plik i wznawia od ostatniej pozycji słuchania. */
+    private void resumeLibraryItem(FileLibrary.Item item) {
+        String text = FileLibrary.readText(this, item.id);
+        if (text == null || text.trim().isEmpty()) {
+            setStatus("Nie można otworzyć zapisanego pliku.");
+            FileLibrary.remove(this, item.id);
+            refreshLibraryUi();
+            return;
+        }
+        pendingResumeId    = item.id;
+        pendingResumeTitle = item.title;
+        pendingStartChunk  = item.resumeChunk;
+        showScreen(true);
+        speak(text);   // czyta zapisany tekst wprost (bez ponownego tłumaczenia)
+        setStatus(item.percent() >= 99
+            ? "Odtwarzam od początku: " + item.title
+            : "Wznawiam: " + item.title + "  •  " + item.percent() + "%");
+    }
+
+    // ── Panel pamięci (Ustawienia) ────────────────────────────────────────────
+
+    private LinearLayout buildStoragePanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(14), dp(16), dp(16));
+        panel.setBackground(mkRound(C_SURFACE, C_BORDER, 20));
+
+        LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(-1, dp(50));
+        LinearLayout.LayoutParams spacedLp  = new LinearLayout.LayoutParams(-1, -2);
+        spacedLp.setMargins(0, dp(12), 0, 0);
+
+        panel.addView(sectionLabel("PAMIĘĆ PLIKÓW"));
+
+        TextView desc = new TextView(this);
+        desc.setText("Wczytane pliki są zapisywane na urządzeniu wraz z miejscem, "
+            + "w którym skończyłeś słuchać — możesz do nich wrócić. Starsze są "
+            + "automatycznie usuwane po upływie czasu lub przekroczeniu limitu.");
+        desc.setTextColor(C_MUTED);
+        desc.setTextSize(11);
+        desc.setLineSpacing(dp(2), 1f);
+        panel.addView(desc, mbottom(dp(6)));
+
+        panel.addView(sectionLabel("CZAS PRZECHOWYWANIA"), spacedLp);
+        retentionSpinner = styledSpinner(RETENTION_LABELS);
+        panel.addView(retentionSpinner, spinnerLp);
+
+        LinearLayout.LayoutParams spacedLp2 = new LinearLayout.LayoutParams(-1, -2);
+        spacedLp2.setMargins(0, dp(12), 0, 0);
+        panel.addView(sectionLabel("LIMIT PAMIĘCI"), spacedLp2);
+        storageCapSpinner = styledSpinner(STORAGE_LABELS);
+        panel.addView(storageCapSpinner, spinnerLp);
+
+        storageUsageText = new TextView(this);
+        storageUsageText.setText("");
+        storageUsageText.setTextColor(C_PRIMARY);
+        storageUsageText.setTextSize(11);
+        storageUsageText.setPadding(dp(2), dp(10), 0, 0);
+        panel.addView(storageUsageText);
+
+        Button clearBtn = secondaryBtn("🗑  Wyczyść zapisane pliki");
+        LinearLayout.LayoutParams cbLp = new LinearLayout.LayoutParams(-1, dp(46));
+        cbLp.setMargins(0, dp(10), 0, 0);
+        panel.addView(clearBtn, cbLp);
+
+        retentionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_RETENTION, pos).apply();
+                FileLibrary.enforce(MainActivity.this, retentionDays(), storageCapBytes());
+                refreshLibraryUi();
+            }
+            @Override public void onNothingSelected(AdapterView<?> p) {}
+        });
+
+        storageCapSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_STORAGE_CAP, pos).apply();
+                FileLibrary.enforce(MainActivity.this, retentionDays(), storageCapBytes());
+                refreshLibraryUi();
+            }
+            @Override public void onNothingSelected(AdapterView<?> p) {}
+        });
+
+        clearBtn.setOnClickListener(v -> {
+            FileLibrary.clearAll(this);
+            currentLibraryId = "";
+            refreshLibraryUi();
+            if (settingsStatus != null) settingsStatus.setText("Pamięć plików wyczyszczona.");
+        });
+
+        return panel;
+    }
+
+    private void updateStorageUsage() {
+        if (storageUsageText == null) return;
+        List<FileLibrary.Item> items = FileLibrary.list(this);
+        long used = 0;
+        for (FileLibrary.Item it : items) used += it.sizeBytes;
+        storageUsageText.setText("Zajęte: " + fmtSize(used) + " z " + fmtSize(storageCapBytes())
+            + "   •   plików: " + items.size());
+    }
+
+    private String fmtSize(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        double kb = bytes / 1024.0;
+        if (kb < 1024) return String.format(Locale.US, "%.0f KB", kb);
+        double mb = kb / 1024.0;
+        if (mb < 1024) return String.format(Locale.US, "%.1f MB", mb);
+        return String.format(Locale.US, "%.2f GB", mb / 1024.0);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
     //  Odtwarzanie
     // ════════════════════════════════════════════════════════════════════════
 
@@ -1461,10 +1716,37 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         else { tts.setLanguage(locale); }
         applySpeechRate();
         currentChunks = splitIntoChunks(text);
-        currentChunkIndex = 0;
+
+        // ── Biblioteka: zapis nowego pliku lub wznowienie zapamiętanego ──
+        String fileTitle = null;
+        if (pendingLibraryTitle != null) {
+            FileLibrary.Item it = FileLibrary.save(this, pendingLibraryTitle, text);
+            currentLibraryId = it != null ? it.id : "";
+            fileTitle = pendingLibraryTitle;
+            pendingLibraryTitle = null;
+            lastPersistedChunk = -1;
+            FileLibrary.enforce(this, retentionDays(), storageCapBytes());
+            FileLibrary.updateProgress(this, currentLibraryId, 0, currentChunks.size());
+            refreshLibraryUi();
+        } else if (pendingResumeId != null) {
+            currentLibraryId = pendingResumeId;
+            fileTitle = pendingResumeTitle;
+            pendingResumeId = null;
+            pendingResumeTitle = null;
+            lastPersistedChunk = -1;
+        } else {
+            currentLibraryId = "";   // URL / wklejony tekst — nie zapisujemy
+        }
+
+        int start = pendingStartChunk;
+        pendingStartChunk = 0;
+        currentChunkIndex = (start >= 0 && start < currentChunks.size()) ? start : 0;
+
         readingQueue = true;
         paused = false;
-        currentTitle = text.substring(0, Math.min(60, text.length())).replace("\n", " ").trim();
+        currentTitle = (fileTitle != null && !fileTitle.isEmpty())
+            ? fileTitle
+            : text.substring(0, Math.min(60, text.length())).replace("\n", " ").trim();
         updateProgress();
         speakNextChunk();
         PlayerService.update(this, currentTitle, getCurrentChunkPreview(), true, currentChunkIndex, currentChunks.size());
@@ -1534,6 +1816,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     }
 
     private void stopReading() {
+        persistProgressIfNeeded();
         readingQueue = false;
         paused = false;
         currentChunks = new ArrayList<>();
@@ -1567,7 +1850,16 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                 nowPlayingPreview.setText(getCurrentChunkPreview());
             }
         }
+        persistProgressIfNeeded();
         updatePlayPauseBtn();
+    }
+
+    /** Zapisuje aktualną pozycję wznowienia dla pliku z biblioteki (jeśli się zmieniła). */
+    private void persistProgressIfNeeded() {
+        if (currentLibraryId.isEmpty() || currentChunks.isEmpty()) return;
+        if (currentChunkIndex == lastPersistedChunk) return;
+        lastPersistedChunk = currentChunkIndex;
+        FileLibrary.updateProgress(this, currentLibraryId, currentChunkIndex, currentChunks.size());
     }
 
     private void updatePlayPauseBtn() {
