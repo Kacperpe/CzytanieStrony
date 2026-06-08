@@ -1,6 +1,7 @@
 package pl.local.czytnikstrony;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.DownloadManager;
 import android.app.StatusBarManager;
 import android.content.BroadcastReceiver;
@@ -170,8 +171,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     // ── Biblioteka plików (pamięć podręczna z pozycją wznowienia) ─────────────
     private static final String PREF_RETENTION   = "retention_idx";
     private static final String PREF_STORAGE_CAP = "storage_cap_idx";
-    private static final int[]    RETENTION_DAYS   = { 1, 2, 3, 7 };
-    private static final String[] RETENTION_LABELS = { "1 dzień", "2 dni", "3 dni", "7 dni" };
+    private static final int[]    RETENTION_DAYS   = { 1, 2, 3, 7, FileLibrary.RETENTION_FOREVER };
+    private static final String[] RETENTION_LABELS = { "1 dzień", "2 dni", "3 dni", "7 dni", "Na zawsze" };
     private static final long[]   STORAGE_CAPS     = {
         512L * 1024 * 1024, 1024L * 1024 * 1024, 2L * 1024 * 1024 * 1024, 5L * 1024 * 1024 * 1024
     };
@@ -220,7 +221,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         buildUi();
         restorePrefs();
         configureWebView();
-        FileLibrary.enforce(this, retentionDays(), storageCapBytes());
+        FileLibrary.enforce(this, storageCapBytes());
         refreshLibraryUi();
         tts = new TextToSpeech(this, this);
         handleIncomingIntent(getIntent());
@@ -1535,6 +1536,20 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
 
+        // Chip retencji per plik (decyzja osobna dla każdego pliku)
+        Button keep = new Button(this);
+        keep.setText(retentionShort(item.retentionDays));
+        keep.setAllCaps(false);
+        keep.setTextSize(11);
+        keep.setTextColor(item.isForever() ? C_PRIMARY : C_MUTED);
+        keep.setTypeface(Typeface.DEFAULT_BOLD);
+        keep.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, C_BORDER, 14));
+        keep.setPadding(dp(10), 0, dp(10), 0);
+        keep.setStateListAnimator(null);
+        LinearLayout.LayoutParams klp = new LinearLayout.LayoutParams(-2, dp(34));
+        klp.setMargins(0, 0, dp(4), 0);
+        row.addView(keep, klp);
+
         Button del = new Button(this);
         del.setText("✕");
         del.setTextSize(15);
@@ -1547,12 +1562,39 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         row.addView(del, new LinearLayout.LayoutParams(dp(40), dp(40)));
 
         col.setOnClickListener(v -> resumeLibraryItem(item));
+        keep.setOnClickListener(v -> chooseRetention(item));
         del.setOnClickListener(v -> {
             FileLibrary.remove(this, item.id);
             if (item.id.equals(currentLibraryId)) currentLibraryId = "";
             refreshLibraryUi();
         });
         return row;
+    }
+
+    /** Krótka etykieta retencji na chip ("📌 zawsze" / "⏳ 3 dni"). */
+    private String retentionShort(int days) {
+        if (days <= FileLibrary.RETENTION_FOREVER) return "📌 zawsze";
+        return "⏳ " + days + (days == 1 ? " dzień" : " dni");
+    }
+
+    private int indexOfRetention(int days) {
+        for (int i = 0; i < RETENTION_DAYS.length; i++) if (RETENTION_DAYS[i] == days) return i;
+        return 2;   // fallback: 3 dni
+    }
+
+    /** Dialog wyboru, jak długo trzymać dany plik (osobno dla każdego). */
+    private void chooseRetention(FileLibrary.Item item) {
+        new AlertDialog.Builder(this)
+            .setTitle("Przechowuj „" + item.title + "”")
+            .setSingleChoiceItems(RETENTION_LABELS, indexOfRetention(item.retentionDays),
+                (d, which) -> {
+                    FileLibrary.setRetention(this, item.id, RETENTION_DAYS[which]);
+                    d.dismiss();
+                    FileLibrary.enforce(this, storageCapBytes());
+                    refreshLibraryUi();
+                })
+            .setNegativeButton("Anuluj", null)
+            .show();
     }
 
     /** Wczytuje zapamiętany plik i wznawia od ostatniej pozycji słuchania. */
@@ -1589,15 +1631,16 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         panel.addView(sectionLabel("PAMIĘĆ PLIKÓW"));
 
         TextView desc = new TextView(this);
-        desc.setText("Wczytane pliki są zapisywane na urządzeniu wraz z miejscem, "
-            + "w którym skończyłeś słuchać — możesz do nich wrócić. Starsze są "
-            + "automatycznie usuwane po upływie czasu lub przekroczeniu limitu.");
+        desc.setText("Wczytane pliki są zapisywane na urządzeniu (jako tekst) wraz z "
+            + "miejscem, w którym skończyłeś słuchać — możesz do nich wrócić. Poniższy "
+            + "czas to wartość domyślna dla NOWYCH plików; dla każdego pliku możesz ją "
+            + "zmienić osobno na liście „Ostatnie pliki” (również „na zawsze”).");
         desc.setTextColor(C_MUTED);
         desc.setTextSize(11);
         desc.setLineSpacing(dp(2), 1f);
         panel.addView(desc, mbottom(dp(6)));
 
-        panel.addView(sectionLabel("CZAS PRZECHOWYWANIA"), spacedLp);
+        panel.addView(sectionLabel("DOMYŚLNY CZAS PRZECHOWYWANIA"), spacedLp);
         retentionSpinner = styledSpinner(RETENTION_LABELS);
         panel.addView(retentionSpinner, spinnerLp);
 
@@ -1622,9 +1665,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         retentionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                // Zmienia tylko wartość domyślną dla nowych plików (nie rusza istniejących).
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_RETENTION, pos).apply();
-                FileLibrary.enforce(MainActivity.this, retentionDays(), storageCapBytes());
-                refreshLibraryUi();
             }
             @Override public void onNothingSelected(AdapterView<?> p) {}
         });
@@ -1633,7 +1675,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             @Override
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_STORAGE_CAP, pos).apply();
-                FileLibrary.enforce(MainActivity.this, retentionDays(), storageCapBytes());
+                FileLibrary.enforce(MainActivity.this, storageCapBytes());
                 refreshLibraryUi();
             }
             @Override public void onNothingSelected(AdapterView<?> p) {}
@@ -1720,12 +1762,12 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         // ── Biblioteka: zapis nowego pliku lub wznowienie zapamiętanego ──
         String fileTitle = null;
         if (pendingLibraryTitle != null) {
-            FileLibrary.Item it = FileLibrary.save(this, pendingLibraryTitle, text);
+            FileLibrary.Item it = FileLibrary.save(this, pendingLibraryTitle, text, retentionDays());
             currentLibraryId = it != null ? it.id : "";
             fileTitle = pendingLibraryTitle;
             pendingLibraryTitle = null;
             lastPersistedChunk = -1;
-            FileLibrary.enforce(this, retentionDays(), storageCapBytes());
+            FileLibrary.enforce(this, storageCapBytes());
             FileLibrary.updateProgress(this, currentLibraryId, 0, currentChunks.size());
             refreshLibraryUi();
         } else if (pendingResumeId != null) {

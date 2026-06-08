@@ -21,6 +21,9 @@ import java.util.List;
  */
 class FileLibrary {
 
+    /** Specjalna wartość retencji: przechowuj plik bez limitu czasu. */
+    static final int RETENTION_FOREVER = 0;
+
     /** Pojedynczy zapamiętany plik. */
     static class Item {
         String id;
@@ -30,6 +33,9 @@ class FileLibrary {
         long   sizeBytes;
         int    resumeChunk;
         int    totalChunks;
+        int    retentionDays = 3;   // 0 = na zawsze (RETENTION_FOREVER)
+
+        boolean isForever() { return retentionDays <= RETENTION_FOREVER; }
 
         /** Postęp 0–100% (na podstawie zapamiętanego fragmentu). */
         int percent() {
@@ -71,6 +77,7 @@ class FileLibrary {
                 it.sizeBytes    = o.optLong("sizeBytes");
                 it.resumeChunk  = o.optInt("resumeChunk");
                 it.totalChunks  = o.optInt("totalChunks");
+                it.retentionDays = o.optInt("retentionDays", 3);
                 if (textFile(ctx, it.id).exists()) items.add(it);
             }
         } catch (Exception ignored) {}
@@ -90,6 +97,7 @@ class FileLibrary {
                 o.put("sizeBytes", it.sizeBytes);
                 o.put("resumeChunk", it.resumeChunk);
                 o.put("totalChunks", it.totalChunks);
+                o.put("retentionDays", it.retentionDays);
                 arr.put(o);
             } catch (Exception ignored) {}
         }
@@ -98,8 +106,12 @@ class FileLibrary {
         } catch (Exception ignored) {}
     }
 
-    /** Zapisuje (lub nadpisuje) tekst pliku i zwraca jego wpis. */
-    static Item save(Context ctx, String title, String text) {
+    /**
+     * Zapisuje (lub nadpisuje) tekst pliku i zwraca jego wpis. Nowemu plikowi
+     * nadaje domyślną retencję {@code defaultRetentionDays}; istniejący zachowuje
+     * swoją (decyzja per plik nie jest nadpisywana przy ponownym wczytaniu).
+     */
+    static Item save(Context ctx, String title, String text, int defaultRetentionDays) {
         String id = idFor(title);
         byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
         try (FileOutputStream fos = new FileOutputStream(textFile(ctx, id))) {
@@ -116,6 +128,7 @@ class FileLibrary {
             found.id = id;
             found.savedAt = now;
             found.resumeChunk = 0;
+            found.retentionDays = defaultRetentionDays;
             items.add(found);
         }
         found.title = title;
@@ -123,6 +136,14 @@ class FileLibrary {
         found.sizeBytes = bytes.length;
         writeIndex(ctx, items);
         return found;
+    }
+
+    /** Ustawia retencję pojedynczego pliku (0 = na zawsze). */
+    static void setRetention(Context ctx, String id, int days) {
+        List<Item> items = list(ctx);
+        for (Item it : items) {
+            if (it.id.equals(id)) { it.retentionDays = days; writeIndex(ctx, items); return; }
+        }
     }
 
     static String readText(Context ctx, String id) {
@@ -168,23 +189,29 @@ class FileLibrary {
     }
 
     /**
-     * Usuwa wpisy starsze niż {@code retentionDays} dni oraz — gdy łączny
-     * rozmiar przekracza {@code capBytes} — eksmituje najstarsze (zawsze
-     * zostawiając przynajmniej najświeższy plik).
+     * Sprząta bibliotekę: usuwa pliki, którym minął ich własny czas
+     * przechowywania (poza oznaczonymi „na zawsze"), a gdy łączny rozmiar
+     * przekracza {@code capBytes} — eksmituje najstarsze NIE-oznaczone „na
+     * zawsze" (te są chronione i pozostają mimo limitu).
      */
-    static void enforce(Context ctx, int retentionDays, long capBytes) {
+    static void enforce(Context ctx, long capBytes) {
         long now = System.currentTimeMillis();
-        long maxAge = retentionDays * 24L * 3600_000L;
 
         List<Item> fresh = new ArrayList<>();
         for (Item it : list(ctx)) {            // już posortowane: najświeższe pierwsze
-            if (now - it.lastOpenedAt > maxAge) textFile(ctx, it.id).delete();
-            else fresh.add(it);
+            if (!it.isForever()) {
+                long maxAge = it.retentionDays * 24L * 3600_000L;
+                if (now - it.lastOpenedAt > maxAge) { textFile(ctx, it.id).delete(); continue; }
+            }
+            fresh.add(it);
         }
 
+        // Limit pamięci: pliki „na zawsze" zostają zawsze; resztę tniemy od najstarszych.
         long sum = 0;
         List<Item> kept = new ArrayList<>();
+        for (Item it : fresh) if (it.isForever()) { kept.add(it); sum += it.sizeBytes; }
         for (Item it : fresh) {
+            if (it.isForever()) continue;
             if (!kept.isEmpty() && sum + it.sizeBytes > capBytes) {
                 textFile(ctx, it.id).delete();
             } else {
