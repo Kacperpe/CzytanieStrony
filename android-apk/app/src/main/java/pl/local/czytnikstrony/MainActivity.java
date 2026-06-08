@@ -17,6 +17,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.provider.OpenableColumns;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
@@ -53,9 +54,17 @@ import com.google.mlkit.nl.translate.Translation;
 import com.google.mlkit.nl.translate.Translator;
 import com.google.mlkit.nl.translate.TranslatorOptions;
 
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
+import com.tom_roush.pdfbox.pdmodel.PDDocument;
+import com.tom_roush.pdfbox.text.PDFTextStripper;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -64,11 +73,15 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class MainActivity extends Activity implements TextToSpeech.OnInitListener {
 
     private static final int   MAX_CHUNK = 260;
     private static final int   MAX_EXTRACTED_TEXT = 120000;
+    private static final int   REQ_PICK_FILE = 4711;
+    private static final int   MAX_FILE_BYTES = 32 * 1024 * 1024;   // 32 MB limit na plik
     private static final float DEF_RATE      = 1.00f;
     private static final float RATE_MIN      = 0.50f;
     private static final float RATE_STEP     = 0.25f;
@@ -619,11 +632,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
         blp.setMargins(0, dp(8), 0, 0);
 
+        Button fileBtn    = secondaryBtn("📄 Wczytaj plik");
+        btns.addView(fileBtn, actionBtnLp());
         Button cursorBtn  = secondaryBtn("Od kursora");
         btns.addView(cursorBtn, actionBtnLp());
         card.addView(btns, blp);
 
         clearBtn.setOnClickListener(v -> { textInput.setText(""); stopReading(); });
+        fileBtn.setOnClickListener(v -> pickFile());
         cursorBtn.setOnClickListener(v -> speakFromCursor());
 
         return card;
@@ -1123,6 +1139,277 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             setStatus("Wczytano udostępniony tekst.");
             maybeTranslateAndSpeak(value);
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Wczytywanie plików (txt, md, pdf, docx, odt, rtf, html…)
+    // ════════════════════════════════════════════════════════════════════════
+
+    /** Otwiera systemowy wybór pliku z filtrem na obsługiwane typy dokumentów. */
+    private void pickFile() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        String[] mimes = {
+            "text/*",
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.oasis.opendocument.text",
+            "application/rtf",
+            "application/json",
+            "application/xml"
+        };
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimes);
+        try {
+            startActivityForResult(intent, REQ_PICK_FILE);
+        } catch (Exception e) {
+            setStatus("Brak aplikacji do wyboru pliku.");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_FILE) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        loadFile(data.getData());
+    }
+
+    /** Wczytuje plik w tle, wyciąga z niego tekst i zaczyna czytać. */
+    private void loadFile(Uri uri) {
+        String name = queryDisplayName(uri);
+        final String fileName = (name != null && !name.isEmpty()) ? name : "plik";
+        setStatus("Wczytuję „" + fileName + "”…");
+        new Thread(() -> {
+            String text;
+            try {
+                text = extractTextFromUri(uri, fileName);
+            } catch (Throwable t) {
+                runOnUiThread(() -> setStatus("Nie udało się wczytać pliku."));
+                return;
+            }
+            final String extracted = text == null ? "" : text.trim();
+            runOnUiThread(() -> {
+                if (extracted.isEmpty()) {
+                    setStatus("Nie znaleziono tekstu w pliku „" + fileName + "”.");
+                    return;
+                }
+                String t = extracted;
+                if (t.length() > MAX_EXTRACTED_TEXT) {
+                    t = t.substring(0, MAX_EXTRACTED_TEXT).trim();
+                    setStatus("Plik jest bardzo długi — wczytano skróconą wersję.");
+                } else {
+                    setStatus("Wczytano: " + fileName);
+                }
+                textInput.setText(t);
+                maybeTranslateAndSpeak(t);
+            });
+        }).start();
+    }
+
+    /** Pobiera czytelną nazwę pliku z dostawcy treści (do tytułu/typowania). */
+    private String queryDisplayName(Uri uri) {
+        try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                if (idx >= 0) return c.getString(idx);
+            }
+        } catch (Exception ignored) {}
+        String last = uri.getLastPathSegment();
+        return last != null ? last : "";
+    }
+
+    /** Dobiera ekstraktor po rozszerzeniu / typie MIME. */
+    private String extractTextFromUri(Uri uri, String fileName) throws Exception {
+        String lower = fileName.toLowerCase(Locale.US);
+        String mime  = getContentResolver().getType(uri);
+        mime = mime == null ? "" : mime.toLowerCase(Locale.US);
+
+        if (lower.endsWith(".pdf") || mime.equals("application/pdf"))
+            return extractPdf(uri);
+        if (lower.endsWith(".docx")
+                || mime.contains("wordprocessingml"))
+            return ooxmlToText(readZipEntry(uri, "word/document.xml"));
+        if (lower.endsWith(".odt") || mime.contains("opendocument.text"))
+            return odfToText(readZipEntry(uri, "content.xml"));
+        if (lower.endsWith(".doc") || mime.equals("application/msword"))
+            return extractLegacyDoc(uri);
+        if (lower.endsWith(".rtf") || mime.contains("rtf"))
+            return stripRtf(readPlainText(uri));
+        if (lower.endsWith(".html") || lower.endsWith(".htm")
+                || lower.endsWith(".xml") || mime.contains("html") || mime.contains("xml"))
+            return stripTags(readPlainText(uri));
+
+        // Domyślnie: zwykły tekst (txt, md, csv, json, log, kod…)
+        return readPlainText(uri);
+    }
+
+    // ── PDF (PdfBox-Android) ──────────────────────────────────────────────────
+
+    private String extractPdf(Uri uri) throws Exception {
+        PDFBoxResourceLoader.init(getApplicationContext());
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             PDDocument doc = PDDocument.load(in)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            stripper.setSortByPosition(true);
+            String text = stripper.getText(doc);
+            return text == null ? "" : text.replaceAll("\\n{3,}", "\n\n").trim();
+        }
+    }
+
+    // ── Czytanie surowych bajtów ──────────────────────────────────────────────
+
+    private byte[] readBytes(Uri uri) throws Exception {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("brak strumienia");
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n, total = 0;
+            while ((n = in.read(buf)) != -1) {
+                total += n;
+                if (total > MAX_FILE_BYTES) { bos.write(buf, 0, n); break; }
+                bos.write(buf, 0, n);
+            }
+            return bos.toByteArray();
+        }
+    }
+
+    private String readPlainText(Uri uri) throws Exception {
+        byte[] bytes = readBytes(uri);
+        int off = 0;   // pomiń BOM UTF-8
+        if (bytes.length >= 3 && (bytes[0] & 0xFF) == 0xEF
+                && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF) off = 3;
+        return new String(bytes, off, bytes.length - off, StandardCharsets.UTF_8);
+    }
+
+    // ── DOCX / ODT (rozpakowanie ZIP, bez bibliotek) ──────────────────────────
+
+    /** Wyciąga z pliku ZIP (docx/odt) zawartość wskazanego wpisu jako tekst XML. */
+    private String readZipEntry(Uri uri, String entryName) throws Exception {
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             ZipInputStream zis = new ZipInputStream(new BufferedInputStream(in))) {
+            ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                if (entryName.equals(e.getName())) {
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = zis.read(buf)) != -1) bos.write(buf, 0, n);
+                    return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+                }
+            }
+        }
+        throw new Exception("Brak wpisu " + entryName);
+    }
+
+    /** Zamienia XML z Worda (OOXML) na czysty tekst, zachowując akapity. */
+    private String ooxmlToText(String xml) {
+        String s = xml;
+        s = s.replaceAll("(?i)</w:p>", "\n");
+        s = s.replaceAll("(?i)<w:tab\\b[^>]*/?>", "\t");
+        s = s.replaceAll("(?i)<w:br\\b[^>]*/?>", "\n");
+        s = s.replaceAll("<[^>]+>", "");
+        return unescapeXml(s).replaceAll("\\n{3,}", "\n\n").trim();
+    }
+
+    /** Zamienia XML z OpenDocument (odt) na czysty tekst, zachowując akapity. */
+    private String odfToText(String xml) {
+        String s = xml;
+        s = s.replaceAll("(?i)</text:p>", "\n");
+        s = s.replaceAll("(?i)</text:h>", "\n");
+        s = s.replaceAll("(?i)<text:tab\\b[^>]*/?>", "\t");
+        s = s.replaceAll("(?i)<text:line-break\\b[^>]*/?>", "\n");
+        s = s.replaceAll("<[^>]+>", "");
+        return unescapeXml(s).replaceAll("\\n{3,}", "\n\n").trim();
+    }
+
+    // ── RTF / HTML / stary DOC ────────────────────────────────────────────────
+
+    /** Bardzo proste odzyskanie tekstu z RTF (usuwa grupy i słowa kontrolne). */
+    private String stripRtf(String rtf) {
+        String s = rtf;
+        s = s.replaceAll("\\\\par[d]?\\b", "\n");
+        s = s.replaceAll("\\\\'[0-9a-fA-F]{2}", "");        // znaki w kodowaniu hex
+        s = s.replaceAll("\\\\[a-zA-Z]+-?[0-9]*\\s?", "");  // słowa kontrolne
+        s = s.replaceAll("[{}]", "");
+        return s.replaceAll("\\n{3,}", "\n\n").trim();
+    }
+
+    /** Usuwa tagi HTML/XML (skrypty, style) i odkodowuje encje. */
+    private String stripTags(String html) {
+        String s = html;
+        s = s.replaceAll("(?is)<script\\b.*?</script>", " ");
+        s = s.replaceAll("(?is)<style\\b.*?</style>", " ");
+        s = s.replaceAll("(?i)</p>|<br\\b[^>]*>|</div>|</li>|</h[1-6]>", "\n");
+        s = s.replaceAll("<[^>]+>", "");
+        s = unescapeXml(s).replace("&nbsp;", " ");
+        return s.replaceAll("[ \\t]{2,}", " ").replaceAll("\\n{3,}", "\n\n").trim();
+    }
+
+    /**
+     * Stary binarny .doc — odzysk best-effort: wyciąga czytelne ciągi znaków.
+     * Pełna obsługa wymaga ciężkiej biblioteki; dla .doc zalecany format .docx.
+     */
+    private String extractLegacyDoc(Uri uri) throws Exception {
+        byte[] bytes = readBytes(uri);
+        StringBuilder out = new StringBuilder();
+        StringBuilder run = new StringBuilder();
+        for (byte b : bytes) {
+            int c = b & 0xFF;
+            boolean printable = c == '\t' || c == '\n' || c == '\r'
+                || (c >= 0x20 && c <= 0x7E) || (c >= 0xA1 && c <= 0xFF);
+            if (printable) {
+                run.append((char) c);
+            } else {
+                if (run.length() >= 4) out.append(run).append(' ');
+                run.setLength(0);
+            }
+        }
+        if (run.length() >= 4) out.append(run);
+        String s = out.toString().replaceAll("[ \\t]{2,}", " ").replaceAll("\\n{3,}", "\n\n").trim();
+        if (s.isEmpty())
+            throw new Exception("Nie udało się odczytać .doc — zapisz jako .docx lub .pdf.");
+        return s;
+    }
+
+    /** Odkodowuje podstawowe encje XML/HTML (w tym liczbowe). */
+    private String unescapeXml(String s) {
+        if (s.indexOf('&') < 0) return s;
+        StringBuilder sb = new StringBuilder(s.length());
+        int i = 0;
+        while (i < s.length()) {
+            char ch = s.charAt(i);
+            if (ch == '&') {
+                int semi = s.indexOf(';', i);
+                if (semi > i && semi - i <= 10) {
+                    String ent = s.substring(i + 1, semi);
+                    String rep = decodeEntity(ent);
+                    if (rep != null) { sb.append(rep); i = semi + 1; continue; }
+                }
+            }
+            sb.append(ch);
+            i++;
+        }
+        return sb.toString();
+    }
+
+    private String decodeEntity(String ent) {
+        switch (ent) {
+            case "amp":  return "&";
+            case "lt":   return "<";
+            case "gt":   return ">";
+            case "quot": return "\"";
+            case "apos": return "'";
+            case "nbsp": return " ";
+        }
+        try {
+            if (ent.startsWith("#x") || ent.startsWith("#X"))
+                return String.valueOf((char) Integer.parseInt(ent.substring(2), 16));
+            if (ent.startsWith("#"))
+                return String.valueOf((char) Integer.parseInt(ent.substring(1)));
+        } catch (Exception ignored) {}
+        return null;
     }
 
     // ════════════════════════════════════════════════════════════════════════
