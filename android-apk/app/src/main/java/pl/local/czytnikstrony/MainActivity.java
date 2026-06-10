@@ -1137,6 +1137,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void applyReaderMode() {
         setStatus("Ekstrahuję artykuł…");
+        final String pageUrl   = normalizeUrl(urlInput.getText().toString());
+        final String pageTitle = webPageTitle(webView.getTitle(), pageUrl);
         String js = "(function(){"
             + "var sel=['article','[role=\"main\"]','main','.article-body','.article-content',"
             + "'.post-content','.entry-content','.story-body','#article-body','#content-body','.body-copy'];"
@@ -1170,6 +1172,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
             if (originalLength <= MAX_EXTRACTED_TEXT) {
                 setStatus("Artykuł gotowy.");
             }
+            pendingLibraryTitle = pageTitle;   // speak() zapisze stronę do biblioteki — jak plik
             maybeTranslateAndSpeak(text);
         });
     }
@@ -2290,6 +2293,25 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (url.isEmpty()) return null;
         if (!url.startsWith("http://") && !url.startsWith("https://")) url = "https://" + url;
         return url;
+    }
+
+    /**
+     * Tytuł wpisu biblioteki dla wczytanej strony WWW: tytuł dokumentu, a gdy go
+     * brak — host adresu (np. „example.com"). Stały dla danego adresu, więc
+     * powrót do tej samej strony aktualizuje istniejący wpis i pozycję wznowienia.
+     */
+    private String webPageTitle(String docTitle, String url) {
+        if (docTitle != null) {
+            String t = docTitle.trim();
+            if (!t.isEmpty() && !t.startsWith("http")) {
+                return t.length() > 120 ? t.substring(0, 120).trim() : t;
+            }
+        }
+        if (url != null) {
+            String host = Uri.parse(url).getHost();
+            if (host != null && !host.isEmpty()) return host;
+        }
+        return url != null ? url : "Strona WWW";
     }
 
     private boolean looksLikeUrl(String value) {
