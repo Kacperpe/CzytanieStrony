@@ -2,11 +2,11 @@
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowBackground">#1C1810</item>
-        <item name="android:colorBackground">#1C1810</item>
-        <item name="android:colorAccent">#D4A020</item>
-        <item name="android:colorControlActivated">#D4A020</item>
-        <item name="android:colorControlHighlight">#20D4A020</item>
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:colorBackground">#121212</item>
+        <item name="android:colorAccent">#1DB954</item>
+        <item name="android:colorControlActivated">#1DB954</item>
+        <item name="android:colorControlHighlight">#201DB954</item>
     </style>
 
     <style name="FloatingPanelTheme" parent="android:style/Theme.Material.Dialog.NoActionBar">
@@ -17,7 +17,7 @@
         <item name="android:windowCloseOnTouchOutside">true</item>
         <item name="android:backgroundDimEnabled">true</item>
         <item name="android:backgroundDimAmount">0.25</item>
-        <item name="android:windowBackground">#2A2418</item>
-        <item name="android:colorAccent">#D4A020</item>
+        <item name="android:windowBackground">#181818</item>
+        <item name="android:colorAccent">#1DB954</item>
     </style>
 </resources>

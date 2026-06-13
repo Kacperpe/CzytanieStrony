@@ -20,10 +20,10 @@ import android.os.Build;
 import android.os.IBinder;
 
 public class PlayerService extends Service {
-    private static final int COLOR_PRIMARY_LIGHT = 0xFFB8820A;
-    private static final int COLOR_PRIMARY_DARK = 0xFFD4A020;
-    private static final int COLOR_ICON_LIGHT = 0xFF1C1810;
-    private static final int COLOR_ICON_DARK = 0xFFF7F2E8;
+    private static final int COLOR_PRIMARY_LIGHT = 0xFF1DB954;
+    private static final int COLOR_PRIMARY_DARK = 0xFF1DB954;
+    private static final int COLOR_ICON_LIGHT = 0xFFFFFFFF;
+    private static final int COLOR_ICON_DARK = 0xFF000000;
 
     // Akcje wysyłane z przycisków powiadomienia do MainActivity
     static final String NOTIF_ACTION_PLAY_PAUSE = "czytnik.PLAY_PAUSE";

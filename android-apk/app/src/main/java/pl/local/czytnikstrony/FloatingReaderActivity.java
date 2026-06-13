@@ -78,27 +78,27 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
 
     private void initColors() {
         if (isDarkMode()) {
-            C_SURFACE     = 0xFF2A2418;
-            C_SURFACE2    = 0xFF241E16;
-            C_PRIMARY     = 0xFFD4A020;
-            C_PRIMARY_DIM = 0xFF3A2E10;
-            C_ON_PRIMARY  = 0xFF1C1810;
-            C_TEXT        = 0xFFF7F2E8;
-            C_MUTED       = 0xFFA89F8C;
-            C_BORDER      = 0xFF4E4840;
-            C_DANGER      = 0xFFE05A00;
-            C_DANGER_BG   = 0xFF2A1008;
+            C_SURFACE     = 0xFF181818;
+            C_SURFACE2    = 0xFF282828;
+            C_PRIMARY     = 0xFF1DB954;
+            C_PRIMARY_DIM = 0xFF14301F;
+            C_ON_PRIMARY  = 0xFF000000;
+            C_TEXT        = 0xFFFFFFFF;
+            C_MUTED       = 0xFFB3B3B3;
+            C_BORDER      = 0xFF2A2A2A;
+            C_DANGER      = 0xFFF15E6C;
+            C_DANGER_BG   = 0xFF181818;
         } else {
-            C_SURFACE     = 0xFFFFFFFF;
-            C_SURFACE2    = 0xFFEDE8DC;
-            C_PRIMARY     = 0xFFB8820A;
-            C_PRIMARY_DIM = 0xFFF5E8C0;
+            C_SURFACE     = 0xFFF6F6F6;
+            C_SURFACE2    = 0xFFEDEDED;
+            C_PRIMARY     = 0xFF1DB954;
+            C_PRIMARY_DIM = 0xFFD7F5E3;
             C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFF1C1810;
-            C_MUTED       = 0xFF8E8878;
-            C_BORDER      = 0xFFDDD8CC;
-            C_DANGER      = 0xFFC04E00;
-            C_DANGER_BG   = 0xFFF7F2E8;
+            C_TEXT        = 0xFF121212;
+            C_MUTED       = 0xFF6A6A6A;
+            C_BORDER      = 0xFFE3E3E3;
+            C_DANGER      = 0xFFD92D20;
+            C_DANGER_BG   = 0xFFFFFFFF;
         }
     }
 

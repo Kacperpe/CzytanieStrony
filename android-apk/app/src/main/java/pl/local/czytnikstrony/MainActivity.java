@@ -120,6 +120,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private Button       navReaderBtn;
     private Button       navSettingsBtn;
     private Button       playPauseButton;
+    private LinearLayout miniPlayer;
+    private TextView     miniTitle;
+    private TextView     miniSubtitle;
+    private Button       miniPlayBtn;
+    private ProgressBar  miniProgress;
     private Button       updateButton;
     private long         updateDownloadId = -1L;
     private String       latestReleaseUrl = "";
@@ -296,29 +301,29 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void initColors() {
         if (isDarkMode()) {
-            C_BG          = 0xFF1C1810;
-            C_SURFACE     = 0xFF2A2418;
-            C_SURFACE2    = 0xFF241E16;
-            C_PRIMARY     = 0xFFD4A020;
-            C_PRIMARY_DIM = 0xFF3A2E10;
-            C_ON_PRIMARY  = 0xFF1C1810;
-            C_TEXT        = 0xFFF7F2E8;
-            C_MUTED       = 0xFFA89F8C;
-            C_BORDER      = 0xFF4E4840;
-            C_DANGER      = 0xFFE05A00;
-            C_DANGER_BG   = 0xFF2A1008;
+            C_BG          = 0xFF121212;   // czerń Spotify
+            C_SURFACE     = 0xFF181818;   // karta
+            C_SURFACE2    = 0xFF282828;   // pole / element wewnętrzny
+            C_PRIMARY     = 0xFF1DB954;   // zieleń Spotify
+            C_PRIMARY_DIM = 0xFF14301F;   // ciemny zielony tint (gradient okładki)
+            C_ON_PRIMARY  = 0xFF000000;   // czarny tekst/ikona na zieleni
+            C_TEXT        = 0xFFFFFFFF;
+            C_MUTED       = 0xFFB3B3B3;
+            C_BORDER      = 0xFF2A2A2A;
+            C_DANGER      = 0xFFF15E6C;
+            C_DANGER_BG   = 0xFF181818;
         } else {
-            C_BG          = 0xFFF7F2E8;
-            C_SURFACE     = 0xFFFFFFFF;
-            C_SURFACE2    = 0xFFEDE8DC;
-            C_PRIMARY     = 0xFFB8820A;
-            C_PRIMARY_DIM = 0xFFF5E8C0;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFF1C1810;
-            C_MUTED       = 0xFF8E8878;
-            C_BORDER      = 0xFFDDD8CC;
-            C_DANGER      = 0xFFC04E00;
-            C_DANGER_BG   = 0xFFF7F2E8;
+            C_BG          = 0xFFFFFFFF;
+            C_SURFACE     = 0xFFF6F6F6;
+            C_SURFACE2    = 0xFFEDEDED;
+            C_PRIMARY     = 0xFF1DB954;   // zieleń Spotify (wspólna)
+            C_PRIMARY_DIM = 0xFFD7F5E3;   // jasny zielony tint
+            C_ON_PRIMARY  = 0xFFFFFFFF;   // biały tekst na zieleni (jasny motyw)
+            C_TEXT        = 0xFF121212;
+            C_MUTED       = 0xFF6A6A6A;
+            C_BORDER      = 0xFFE3E3E3;
+            C_DANGER      = 0xFFD92D20;
+            C_DANGER_BG   = 0xFFFFFFFF;
         }
     }
 
@@ -390,14 +395,15 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         content.addView(readerScroll,   new FrameLayout.LayoutParams(-1, -1));
         content.addView(settingsScroll, new FrameLayout.LayoutParams(-1, -1));
 
-        rootCol.addView(content,         new LinearLayout.LayoutParams(-1, 0, 1f));
-        rootCol.addView(buildBottomNav(), new LinearLayout.LayoutParams(-1, -2));
+        rootCol.addView(content,          new LinearLayout.LayoutParams(-1, 0, 1f));
+        rootCol.addView(buildMiniPlayer(), new LinearLayout.LayoutParams(-1, -2));
+        rootCol.addView(buildBottomNav(),  new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(rootCol);
 
         // Pasek systemu
         getWindow().setStatusBarColor(C_BG);
-        getWindow().setNavigationBarColor(C_SURFACE);
+        getWindow().setNavigationBarColor(C_BG);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.view.WindowInsetsController wic = getWindow().getInsetsController();
             if (wic != null) {
@@ -429,10 +435,10 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         titleCol.setOrientation(LinearLayout.VERTICAL);
 
         TextView appName = new TextView(this);
-        appName.setText("Czytnik");
+        appName.setText(greeting());
         appName.setTextColor(C_TEXT);
-        appName.setTextSize(28);
-        appName.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        appName.setTextSize(26);
+        appName.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             appName.setLetterSpacing(-0.02f);
         }
@@ -526,14 +532,110 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return scroll;
     }
 
+    // ── Mini-player (dokowany nad nawigacją — sygnatura Spotify) ──────────────
+    private LinearLayout buildMiniPlayer() {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setVisibility(View.GONE);   // widoczny tylko gdy coś gra
+        miniPlayer = wrap;
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setBackground(mkRound(C_SURFACE2, 0, 8));
+        bar.setPadding(dp(8), dp(8), dp(10), dp(8));
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(-1, -2);
+        barLp.setMargins(dp(8), 0, dp(8), dp(6));
+        wrap.addView(bar, barLp);
+
+        // Mała okładka
+        TextView cover = new TextView(this);
+        cover.setText("♪");
+        cover.setGravity(Gravity.CENTER);
+        cover.setTextColor(C_ON_PRIMARY);
+        cover.setTextSize(18);
+        cover.setBackground(mkGradient(C_PRIMARY, C_PRIMARY_DIM, 6));
+        LinearLayout.LayoutParams covlp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        covlp.setMargins(0, 0, dp(10), 0);
+        bar.addView(cover, covlp);
+
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+
+        miniTitle = new TextView(this);
+        miniTitle.setText("");
+        miniTitle.setTextColor(C_TEXT);
+        miniTitle.setTextSize(13);
+        miniTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        miniTitle.setSingleLine(true);
+        miniTitle.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(miniTitle);
+
+        miniSubtitle = new TextView(this);
+        miniSubtitle.setText("");
+        miniSubtitle.setTextColor(C_MUTED);
+        miniSubtitle.setTextSize(11);
+        miniSubtitle.setSingleLine(true);
+        miniSubtitle.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(miniSubtitle);
+
+        bar.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        miniPlayBtn = new Button(this);
+        miniPlayBtn.setText("▶");
+        miniPlayBtn.setTextSize(18);
+        miniPlayBtn.setAllCaps(false);
+        miniPlayBtn.setTextColor(C_TEXT);
+        miniPlayBtn.setBackground(null);
+        miniPlayBtn.setStateListAnimator(null);
+        miniPlayBtn.setPadding(0, 0, 0, 0);
+        bar.addView(miniPlayBtn, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        // Cienki pasek postępu pod barem
+        miniProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        miniProgress.setMax(100);
+        miniProgress.setProgress(0);
+        LinearLayout.LayoutParams mpLp = new LinearLayout.LayoutParams(-1, dp(2));
+        mpLp.setMargins(dp(14), 0, dp(14), dp(4));
+        wrap.addView(miniProgress, mpLp);
+
+        // Stuknięcie miniaturki/tytułu → ekran czytania (pełny player)
+        col.setOnClickListener(v -> showScreen(true));
+        cover.setOnClickListener(v -> showScreen(true));
+        miniPlayBtn.setOnClickListener(v -> handlePlayPause());
+
+        return wrap;
+    }
+
+    /** Synchronizuje mini-player z aktualnym stanem odtwarzania. */
+    private void updateMiniPlayer() {
+        if (miniPlayer == null) return;
+        boolean active = !currentChunks.isEmpty();
+        miniPlayer.setVisibility(active ? View.VISIBLE : View.GONE);
+        if (!active) return;
+        if (miniTitle != null)
+            miniTitle.setText(currentTitle.isEmpty() ? "Czyta…" : currentTitle);
+        if (miniSubtitle != null) {
+            int total = currentChunks.size();
+            miniSubtitle.setText((paused ? "Pauza" : "Odtwarzanie")
+                + "  •  " + (currentChunkIndex + 1) + " / " + total);
+        }
+        if (miniPlayBtn != null)
+            miniPlayBtn.setText(readingQueue && !paused ? "⏸" : "▶");
+        if (miniProgress != null) {
+            int total = currentChunks.size();
+            miniProgress.setProgress(total <= 1 ? 0 : (int)(currentChunkIndex * 100f / (total - 1)));
+        }
+    }
+
     // ── Dolny pasek nawigacji ─────────────────────────────────────────────────
     private LinearLayout buildBottomNav() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setBackgroundColor(C_SURFACE);
+        bar.setBackgroundColor(C_BG);
         bar.setPadding(dp(8), dp(8), dp(8), dp(10));
 
-        navReaderBtn   = navButton("📖", "Czytanie");
+        navReaderBtn   = navButton("⌂", "Start");
         navSettingsBtn = navButton("⚙", "Ustawienia");
 
         navReaderBtn.setOnClickListener(v -> showScreen(true));
@@ -563,11 +665,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         if (readerScroll != null)   readerScroll.setVisibility(reader ? View.VISIBLE : View.GONE);
         if (settingsScroll != null) settingsScroll.setVisibility(reader ? View.GONE : View.VISIBLE);
         if (navReaderBtn != null) {
-            navReaderBtn.setTextColor(reader ? C_PRIMARY : C_MUTED);
+            navReaderBtn.setTextColor(reader ? C_TEXT : C_MUTED);
             navReaderBtn.setTypeface(reader ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         }
         if (navSettingsBtn != null) {
-            navSettingsBtn.setTextColor(reader ? C_MUTED : C_PRIMARY);
+            navSettingsBtn.setTextColor(reader ? C_MUTED : C_TEXT);
             navSettingsBtn.setTypeface(reader ? Typeface.DEFAULT : Typeface.DEFAULT_BOLD);
         }
     }
@@ -708,14 +810,26 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(18), dp(18), dp(16));
-        card.setBackground(mkRound(C_PRIMARY_DIM, isDarkMode() ? C_BORDER : 0, 22));
+        card.setBackground(mkRound(C_SURFACE, isDarkMode() ? 0 : C_BORDER, 22));
+
+        // ── Okładka „cover" (gradient zieleni z nutą) ──
+        TextView cover = new TextView(this);
+        cover.setText("♪");
+        cover.setTextSize(56);
+        cover.setGravity(Gravity.CENTER);
+        cover.setTextColor(C_ON_PRIMARY);
+        cover.setBackground(mkGradient(C_PRIMARY, C_PRIMARY_DIM, 14));
+        LinearLayout.LayoutParams covlp = new LinearLayout.LayoutParams(dp(132), dp(132));
+        covlp.gravity = Gravity.CENTER_HORIZONTAL;
+        covlp.setMargins(0, 0, 0, dp(18));
+        card.addView(cover, covlp);
 
         // Now-playing title
         nowPlayingTitle = new TextView(this);
         nowPlayingTitle.setText("Gotowy do czytania");
-        nowPlayingTitle.setTextColor(C_PRIMARY);
-        nowPlayingTitle.setTextSize(13);
-        nowPlayingTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        nowPlayingTitle.setTextColor(C_TEXT);
+        nowPlayingTitle.setTextSize(17);
+        nowPlayingTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         nowPlayingTitle.setSingleLine(true);
         nowPlayingTitle.setEllipsize(TextUtils.TruncateAt.END);
         card.addView(nowPlayingTitle);
@@ -764,9 +878,9 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         Button nextBtn = controlBtn("⏭");
         Button stopBtn = stopButton();
 
-        // Zwarta grupa wyśrodkowana na środku panelu, z równymi odstępami
+        // Zwarta grupa wyśrodkowana — Play wyróżniony większym zielonym krążkiem
         controls.addView(prevBtn,         ctrlLp());
-        controls.addView(playPauseButton, ctrlLp());
+        controls.addView(playPauseButton, playLp());
         controls.addView(nextBtn,         ctrlLp());
         controls.addView(stopBtn,         ctrlLp());
         card.addView(controls, clp);
@@ -945,10 +1059,11 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         btn.setText(text);
         btn.setAllCaps(false);
         btn.setTextSize(13);
-        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         btn.setTextColor(C_ON_PRIMARY);
-        btn.setBackground(mkRound(C_PRIMARY, 0, 12));
-        btn.setPadding(dp(14), 0, dp(14), 0);
+        btn.setBackground(mkRound(C_PRIMARY, 0, 24));   // zielona pigułka Spotify
+        btn.setPadding(dp(18), 0, dp(18), 0);
+        btn.setStateListAnimator(null);
         return btn;
     }
 
@@ -983,47 +1098,58 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return lp;
     }
 
-    /** Rozmiar (średnica) każdego przycisku sterowania — jednakowy dla wszystkich. */
-    private static final int CTRL_SIZE = 60;
+    /** Rozmiar pól dotyku przycisków pobocznych (prev/next/stop) i głównego Play. */
+    private static final int CTRL_SIZE = 56;
+    private static final int PLAY_SIZE = 66;
 
-    /** Jednakowy rozmiar każdego guzika sterowania + równe boczne odstępy (grupa wyśrodkowana). */
+    /** Pole dotyku guzika pobocznego + boczne odstępy (grupa wyśrodkowana). */
     private LinearLayout.LayoutParams ctrlLp() {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(CTRL_SIZE), dp(CTRL_SIZE));
         lp.setMargins(dp(8), 0, dp(8), 0);
         return lp;
     }
 
+    /** Większe pole dla głównego, zielonego Play/Pause. */
+    private LinearLayout.LayoutParams playLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(PLAY_SIZE), dp(PLAY_SIZE));
+        lp.setMargins(dp(10), 0, dp(10), 0);
+        return lp;
+    }
+
+    /** Prev/Next — białe ikony bez tła (jak Spotify). */
     private Button controlBtn(String text) {
         Button btn = new Button(this);
         btn.setText(text);
-        btn.setTextSize(22);
+        btn.setTextSize(24);
         btn.setAllCaps(false);
-        btn.setTextColor(C_PRIMARY);
-        btn.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, C_BORDER, CTRL_SIZE / 2));
+        btn.setTextColor(C_TEXT);
+        btn.setBackground(null);
         btn.setPadding(0, 0, 0, 0);
         btn.setStateListAnimator(null);
         return btn;
     }
 
+    /** Główny Play/Pause — duży zielony krążek, czarna ikona. */
     private Button playPauseBtn() {
         Button btn = new Button(this);
         btn.setText("▶");
-        btn.setTextSize(26);
+        btn.setTextSize(28);
         btn.setAllCaps(false);
         btn.setTextColor(C_ON_PRIMARY);
-        btn.setBackground(mkRound(C_PRIMARY, 0, CTRL_SIZE / 2));
+        btn.setBackground(mkRound(C_PRIMARY, 0, PLAY_SIZE / 2));
         btn.setPadding(0, 0, 0, 0);
         btn.setStateListAnimator(null);
         return btn;
     }
 
+    /** Stop — dyskretny, bez tła (poboczny). */
     private Button stopButton() {
         Button btn = new Button(this);
         btn.setText("⏹");
         btn.setTextSize(20);
         btn.setAllCaps(false);
-        btn.setTextColor(C_DANGER);
-        btn.setBackground(mkRound(C_DANGER_BG, C_DANGER, CTRL_SIZE / 2));
+        btn.setTextColor(C_MUTED);
+        btn.setBackground(null);
         btn.setPadding(0, 0, 0, 0);
         btn.setStateListAnimator(null);
         return btn;
@@ -1055,6 +1181,48 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return tv;
     }
 
+    /** Pogrubiony nagłówek sekcji w stylu Spotify (np. „Ostatnie pliki"). */
+    private TextView headerLabel(String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(C_TEXT);
+        tv.setTextSize(19);
+        tv.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            tv.setLetterSpacing(-0.01f);
+        }
+        return tv;
+    }
+
+    /** Kwadratowa okładka pliku — kolorowy gradient + inicjał/typ (jak miniatura playlisty). */
+    private TextView coverTile(String title, int sizeDp, float textSp) {
+        TextView t = new TextView(this);
+        String initial = (title == null || title.trim().isEmpty())
+            ? "♪" : title.trim().substring(0, 1).toUpperCase(Locale.getDefault());
+        t.setText(initial);
+        t.setTextColor(C_ON_PRIMARY);
+        t.setTextSize(textSp);
+        t.setGravity(Gravity.CENTER);
+        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        // Deterministyczny odcień z tytułu — różne pliki, różne okładki
+        int[] tints = { 0xFF1DB954, 0xFF2D46B9, 0xFFAF2896, 0xFFE8115B,
+                        0xFFE1118C, 0xFFBC5900, 0xFF148A08, 0xFF477D95 };
+        int tint = tints[Math.abs((title == null ? 0 : title.hashCode())) % tints.length];
+        t.setBackground(mkGradient(tint, blend(tint, 0xFF000000, 0.45f), 8));
+        return t;
+    }
+
+    /** Miesza dwa kolory ARGB (ratio 0..1 w stronę drugiego). */
+    private int blend(int a, int b, float ratio) {
+        float ia = 1f - ratio;
+        int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+        int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
+        int r = Math.round(ar * ia + br * ratio);
+        int g = Math.round(ag * ia + bg * ratio);
+        int bl = Math.round(ab * ia + bb * ratio);
+        return 0xFF000000 | (r << 16) | (g << 8) | bl;
+    }
+
     // ════════════════════════════════════════════════════════════════════════
     //  Helpers UI
     // ════════════════════════════════════════════════════════════════════════
@@ -1075,6 +1243,14 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return d;
     }
 
+    /** Pionowy gradient (np. okładka „cover" w stylu Spotify). */
+    private GradientDrawable mkGradient(int top, int bottom, int radiusDp) {
+        GradientDrawable d = new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR, new int[]{ top, bottom });
+        d.setCornerRadius(dp(radiusDp));
+        return d;
+    }
+
     private LinearLayout.LayoutParams mbottom(int bottom) {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(0, 0, 0, bottom);
@@ -1089,6 +1265,15 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private int dp(int v) {
         return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    /** Powitanie zależne od pory dnia (styl Spotify). */
+    private String greeting() {
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        if (h < 5)  return "Dobranoc";
+        if (h < 12) return "Dzień dobry";
+        if (h < 18) return "Miłego dnia";
+        return "Dobry wieczór";
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1478,13 +1663,15 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     // ════════════════════════════════════════════════════════════════════════
 
     private LinearLayout buildLibraryCard() {
-        libraryCard = surfaceCard();
+        libraryCard = new LinearLayout(this);
+        libraryCard.setOrientation(LinearLayout.VERTICAL);
+        libraryCard.setPadding(dp(4), dp(8), dp(4), dp(4));
 
         LinearLayout topRow = new LinearLayout(this);
         topRow.setOrientation(LinearLayout.HORIZONTAL);
         topRow.setGravity(Gravity.CENTER_VERTICAL);
-        topRow.addView(sectionLabel("OSTATNIE PLIKI"), new LinearLayout.LayoutParams(0, -2, 1f));
-        libraryCard.addView(topRow, mbottom(dp(4)));
+        topRow.addView(headerLabel("Ostatnie pliki"), new LinearLayout.LayoutParams(0, -2, 1f));
+        libraryCard.addView(topRow, mbottom(dp(8)));
 
         libraryList = new LinearLayout(this);
         libraryList.setOrientation(LinearLayout.VERTICAL);
@@ -1509,11 +1696,17 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
-        row.setPadding(dp(12), dp(10), dp(8), dp(10));
+        row.setBackground(null);
+        row.setPadding(0, dp(6), 0, dp(6));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-        rlp.setMargins(0, dp(6), 0, 0);
+        rlp.setMargins(0, dp(2), 0, 0);
         row.setLayoutParams(rlp);
+
+        // Wiodąca okładka (miniatura jak na playliście)
+        TextView cover = coverTile(item.title, 48, 18);
+        LinearLayout.LayoutParams covlp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        covlp.setMargins(0, 0, dp(12), 0);
+        row.addView(cover, covlp);
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -1521,8 +1714,8 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         TextView title = new TextView(this);
         title.setText(item.title);
         title.setTextColor(C_TEXT);
-        title.setTextSize(13);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        title.setTextSize(14);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.MIDDLE);
         col.addView(title);
@@ -2031,6 +2224,7 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
     private void updatePlayPauseBtn() {
         if (playPauseButton != null)
             playPauseButton.setText(readingQueue && !paused ? "⏸" : "▶");
+        updateMiniPlayer();
     }
 
     private String getCurrentChunkPreview() {
