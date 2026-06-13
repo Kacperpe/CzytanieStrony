@@ -1,0 +1,52 @@
+name: Android Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant execute permission
+        run: chmod +x gradlew
+        working-directory: android-apk
+
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+        working-directory: android-apk
+
+      - name: Prepare release APK
+        run: |
+          mkdir -p release-artifacts
+          APK_PATH="$(find "$HOME" . -path "*/outputs/apk/debug/*.apk" -print -quit 2>/dev/null)"
+          if [ -z "$APK_PATH" ]; then
+            echo "No debug APK found"
+            exit 1
+          fi
+          cp "$APK_PATH" "release-artifacts/CzytanieStrony-${GITHUB_REF_NAME}-debug.apk"
+          ls -lh release-artifacts
+        working-directory: android-apk
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android-apk/release-artifacts/CzytanieStrony-${{ github.ref_name }}-debug.apk

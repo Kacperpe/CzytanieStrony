@@ -10,7 +10,48 @@ android {
         applicationId "pl.local.czytnikstrony"
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 16
+        versionName "1.0.15"
     }
+
+    // Stały klucz podpisywania — dzięki temu wszystkie wydania mają ten sam
+    // podpis i aktualizacje OTA działają (Android nie zaktualizuje APK o innym podpisie).
+    signingConfigs {
+        appKey {
+            storeFile file("release.keystore")
+            storePassword "czytanie123"
+            keyAlias "czytanie"
+            keyPassword "czytanie123"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.appKey
+        }
+        release {
+            signingConfig signingConfigs.appKey
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // PdfBox-Android dorzuca własne pliki META-INF — wyklucz, by nie kolidowały.
+    packaging {
+        resources {
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE',
+                         'META-INF/LICENSE.txt', 'META-INF/NOTICE', 'META-INF/NOTICE.txt']
+        }
+    }
+}
+
+dependencies {
+    implementation 'com.google.mlkit:translate:17.0.3'
+    implementation 'com.google.mlkit:language-id:17.0.6'
+    // Ekstrakcja tekstu z plików PDF (on-device, offline)
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
 }

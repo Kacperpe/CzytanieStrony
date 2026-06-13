@@ -21,7 +21,7 @@ Lokalna aplikacja Android do czytania stron i tekstu glosami systemowymi.
 1. Otworz folder `android-apk` w Android Studio.
 2. Poczekaj az Gradle pobierze Android Gradle Plugin.
 3. Wybierz `Build` -> `Build Bundle(s) / APK(s)` -> `Build APK(s)`.
-4. APK bedzie w `%USERPROFILE%/.czytnik-strony-build/CzytnikStrony/app/outputs/apk/debug/app-debug.apk`.
+4. APK bedzie w `android-apk/app/build/outputs/apk/debug/app-debug.apk`.
 
 Na tej maszynie moze byc potrzebna instalacja Android Studio albo Android SDK/JDK, jesli nie sa jeszcze zainstalowane.
 
@@ -41,14 +41,11 @@ Android nie pozwala zwyklej aplikacji samodzielnie odczytac tresci strony z inne
 
 ## Gdy Gradle nie moze usunac katalogu build
 
-Projekt jest w OneDrive, a OneDrive czasem blokuje pliki z `app/build/intermediates`.
-Dlatego build zostal przeniesiony poza OneDrive do `%USERPROFILE%/.czytnik-strony-build`.
+Projekt jest w OneDrive, a OneDrive czasem moze blokowac pliki z `app/build/intermediates`.
 
 Jesli problem dalej wystapi:
 
 1. Zamknij Android Studio.
 2. W Menedzerze zadan zakoncz procesy `java.exe`, `gradle.exe` i `aapt2.exe`, jesli zostaly.
-3. Usun stare katalogi:
-   - `android-apk/app/build`
-   - `%USERPROFILE%/.czytnik-strony-build`
+3. Usun katalog `android-apk/app/build`.
 4. Otworz projekt ponownie i uruchom `:app:assembleDebug`.

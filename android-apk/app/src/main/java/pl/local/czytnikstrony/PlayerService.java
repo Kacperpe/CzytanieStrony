@@ -13,11 +13,17 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.drawable.Icon;
+import android.media.MediaMetadata;
 import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.IBinder;
 
 public class PlayerService extends Service {
+    private static final int COLOR_PRIMARY_LIGHT = 0xFF1DB954;
+    private static final int COLOR_PRIMARY_DARK = 0xFF1DB954;
+    private static final int COLOR_ICON_LIGHT = 0xFFFFFFFF;
+    private static final int COLOR_ICON_DARK = 0xFF000000;
 
     // Akcje wysyłane z przycisków powiadomienia do MainActivity
     static final String NOTIF_ACTION_PLAY_PAUSE = "czytnik.PLAY_PAUSE";
@@ -40,6 +46,7 @@ public class PlayerService extends Service {
     private static final String CHANNEL_ID = "czytnik_playback";
 
     private MediaSession mediaSession;
+    private static Bitmap cachedLargeIcon;
 
     // ── Publiczne API (wołane z MainActivity) ─────────────────────────────
 
@@ -51,7 +58,11 @@ public class PlayerService extends Service {
         i.putExtra(EXTRA_PLAYING, playing);
         i.putExtra(EXTRA_CHUNK,   chunk);
         i.putExtra(EXTRA_TOTAL,   total);
-        ctx.startService(i);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ctx.startForegroundService(i);
+        } else {
+            ctx.startService(i);
+        }
     }
 
     static void hide(Context ctx) {
@@ -65,7 +76,22 @@ public class PlayerService extends Service {
         super.onCreate();
         createChannel();
         mediaSession = new MediaSession(this, "CzytnikStrony");
+        // Sterowanie z ekranu blokady / przycisków słuchawek → te same akcje co przyciski powiadomienia
+        mediaSession.setCallback(new MediaSession.Callback() {
+            @Override public void onPlay()             { sendControl(NOTIF_ACTION_PLAY_PAUSE); }
+            @Override public void onPause()            { sendControl(NOTIF_ACTION_PLAY_PAUSE); }
+            @Override public void onSkipToNext()       { sendControl(NOTIF_ACTION_NEXT); }
+            @Override public void onSkipToPrevious()   { sendControl(NOTIF_ACTION_PREV); }
+            @Override public void onStop()             { sendControl(NOTIF_ACTION_STOP); }
+        });
         mediaSession.setActive(true);
+    }
+
+    private void sendControl(String action) {
+        Intent control = new Intent(ACTION_CONTROL_EVENT);
+        control.setPackage(getPackageName());
+        control.putExtra(KEY_NOTIF_ACTION, action);
+        sendBroadcast(control, INTERNAL_BROADCAST_PERMISSION);
     }
 
     @Override
@@ -76,10 +102,7 @@ public class PlayerService extends Service {
         }
         String action = intent.getAction();
         if (isControlAction(action)) {
-            Intent control = new Intent(ACTION_CONTROL_EVENT);
-            control.setPackage(getPackageName());
-            control.putExtra(KEY_NOTIF_ACTION, action);
-            sendBroadcast(control, INTERNAL_BROADCAST_PERMISSION);
+            sendControl(action);
             return START_NOT_STICKY;
         }
         if (!ACTION_UPDATE.equals(action)) {
@@ -132,6 +155,9 @@ public class PlayerService extends Service {
         String contentText = (nowPlaying != null && !nowPlaying.isEmpty()) ? nowPlaying : "Czyta…";
         String subText     = total > 0 ? "Fragment " + (chunk + 1) + " / " + total : null;
 
+        // Metadane + stan dla ekranu blokady / odtwarzacza systemowego (jak Spotify)
+        updateMediaSession(mainTitle, contentText, playing, chunk, total);
+
         Icon iconPrev      = Icon.createWithResource(this, R.drawable.ic_skip_prev);
         Icon iconPlayPause = Icon.createWithResource(this, playing ? R.drawable.ic_pause : R.drawable.ic_play);
         Icon iconNext      = Icon.createWithResource(this, R.drawable.ic_skip_next);
@@ -139,7 +165,7 @@ public class PlayerService extends Service {
 
         Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_reader_tile)
-            .setLargeIcon(createLargeIcon())
+            .setLargeIcon(getLargeIcon())
             .setContentTitle(mainTitle)
             .setContentText(contentText)
             .setSubText(subText)
@@ -155,10 +181,45 @@ public class PlayerService extends Service {
             .setVisibility(Notification.VISIBILITY_PUBLIC);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            builder.setColor(0xFF5B4AE8).setColorized(true);
+            builder.setColor(isDarkMode() ? COLOR_PRIMARY_DARK : COLOR_PRIMARY_LIGHT).setColorized(true);
         }
 
         return builder.build();
+    }
+
+    private void updateMediaSession(String title, String text, boolean playing, int chunk, int total) {
+        if (mediaSession == null) return;
+
+        MediaMetadata.Builder meta = new MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, text)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, "Czytnik strony")
+            .putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, getLargeIcon());
+        if (total > 0) {
+            meta.putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, total);
+            meta.putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, chunk + 1);
+        }
+        mediaSession.setMetadata(meta.build());
+
+        long actions = PlaybackState.ACTION_PLAY
+            | PlaybackState.ACTION_PAUSE
+            | PlaybackState.ACTION_PLAY_PAUSE
+            | PlaybackState.ACTION_SKIP_TO_NEXT
+            | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+            | PlaybackState.ACTION_STOP;
+        PlaybackState state = new PlaybackState.Builder()
+            .setActions(actions)
+            .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                      PlaybackState.PLAYBACK_POSITION_UNKNOWN, playing ? 1f : 0f)
+            .build();
+        mediaSession.setPlaybackState(state);
+    }
+
+    private Bitmap getLargeIcon() {
+        if (cachedLargeIcon == null || cachedLargeIcon.isRecycled()) {
+            cachedLargeIcon = createLargeIcon();
+        }
+        return cachedLargeIcon;
     }
 
     private Bitmap createLargeIcon() {
@@ -167,11 +228,11 @@ public class PlayerService extends Service {
         Canvas canvas = new Canvas(bmp);
 
         Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bg.setColor(0xFF5B4AE8);
+        bg.setColor(isDarkMode() ? COLOR_PRIMARY_DARK : COLOR_PRIMARY_LIGHT);
         canvas.drawRoundRect(new RectF(0, 0, size, size), 28, 28, bg);
 
         Paint wave = new Paint(Paint.ANTI_ALIAS_FLAG);
-        wave.setColor(0xFFFFFFFF);
+        wave.setColor(isDarkMode() ? COLOR_ICON_DARK : COLOR_ICON_LIGHT);
         wave.setStyle(Paint.Style.STROKE);
         wave.setStrokeCap(Paint.Cap.ROUND);
 
@@ -210,5 +271,11 @@ public class PlayerService extends Service {
             || NOTIF_ACTION_PREV.equals(action)
             || NOTIF_ACTION_NEXT.equals(action)
             || NOTIF_ACTION_STOP.equals(action);
+    }
+
+    private boolean isDarkMode() {
+        int mask = getResources().getConfiguration().uiMode
+            & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return mask == android.content.res.Configuration.UI_MODE_NIGHT_YES;
     }
 }

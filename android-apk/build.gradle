@@ -2,8 +2,11 @@ plugins {
     id "com.android.application" version '8.13.2' apply false
 }
 
-layout.buildDirectory.set(file("${System.getProperty("user.home")}/.czytnik-strony-build/${rootProject.name}/root"))
+def externalBuildRoot = providers.gradleProperty("localBuildDir").orElse("${System.getProperty("user.home")}/.czytnik-strony-build")
 
-subprojects {
-    layout.buildDirectory.set(file("${System.getProperty("user.home")}/.czytnik-strony-build/${rootProject.name}/${project.name}"))
+gradle.beforeProject { project ->
+    def safeProjectPath = project.path == ":" ? "root" : project.path.substring(1).replace(":", "-")
+    project.layout.buildDirectory.set(project.layout.dir(project.providers.provider {
+        project.file("${externalBuildRoot.get()}/${safeProjectPath}")
+    }))
 }

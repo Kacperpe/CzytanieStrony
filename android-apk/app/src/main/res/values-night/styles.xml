@@ -1,15 +1,14 @@
 <resources>
-    <!-- Motyw ciemny -->
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:colorAccent">#3ECBA8</item>
-        <item name="android:colorControlActivated">#3ECBA8</item>
-        <item name="android:colorControlHighlight">#203ECBA8</item>
-        <item name="android:windowBackground">#0D1614</item>
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:colorBackground">#121212</item>
+        <item name="android:colorAccent">#1DB954</item>
+        <item name="android:colorControlActivated">#1DB954</item>
+        <item name="android:colorControlHighlight">#201DB954</item>
     </style>
 
-    <!-- Motyw ciemny — nakładka floating -->
     <style name="FloatingPanelTheme" parent="android:style/Theme.Material.Dialog.NoActionBar">
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:windowIsFloating">true</item>
@@ -18,6 +17,7 @@
         <item name="android:windowCloseOnTouchOutside">true</item>
         <item name="android:backgroundDimEnabled">true</item>
         <item name="android:backgroundDimAmount">0.25</item>
-        <item name="android:colorAccent">#3ECBA8</item>
+        <item name="android:windowBackground">#181818</item>
+        <item name="android:colorAccent">#1DB954</item>
     </style>
 </resources>

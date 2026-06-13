@@ -5,6 +5,18 @@ Aplikacja do czytania stron internetowych na głos. Składa się z dwóch częś
 - **Android APK** — aplikacja mobilna z czytnikiem TTS i powiadomieniem Spotify-style
 - **Rozszerzenie Chrome** — czytnik stron bezpośrednio w przeglądarce z tłumaczeniem na polski
 
+Aplikacja czyta na głos strony WWW, wklejony tekst, a także **całe pliki**
+wczytane z telefonu — `txt`, `md`, `pdf`, `docx`, `odt`, `rtf`, `html`
+i inne pliki tekstowe (przycisk „📄 Wczytaj plik").
+
+Wczytane pliki są **zapamiętywane na urządzeniu** (jako tekst) wraz z miejscem,
+w którym skończyłeś słuchać — możesz w każdej chwili wrócić i wznowić od tego
+momentu (sekcja „Ostatnie pliki"). Czas przechowywania ustawiasz **osobno dla
+każdego pliku** (1 / 2 / 3 / 7 dni albo **na zawsze**) — chip przy pliku na
+liście. W ustawieniach wybierasz wartość domyślną dla nowych plików oraz limit
+pamięci (0,5 / 1 / 2 / 5 GB); pliki oznaczone „na zawsze" nie są kasowane ani
+po czasie, ani przy przekroczeniu limitu.
+
 ---
 
 ## Pobieranie APK na Androida
