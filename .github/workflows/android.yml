@@ -33,7 +33,7 @@ jobs:
           set -o pipefail
           ./gradlew --no-daemon assembleDebug 2>&1 | tee build.log || {
             # Wypisz błędy jako adnotacje (widoczne w podsumowaniu runa)
-            grep -v "> Task" build.log | grep -E -A3 "error:|What went wrong|Could not|FAILURE" | head -60 | while IFS= read -r l; do
+            grep -v "> Task" build.log | grep -E "^e: |error:|What went wrong" | sed "s#file:///home/runner/work/CzytanieStrony/CzytanieStrony/android-apk/app/src/main/java/pl/local/czytnikstrony/##" | head -45 | while IFS= read -r l; do
               echo "::error::${l//%/%25}"
             done
             exit 1
