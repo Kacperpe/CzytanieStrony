@@ -403,7 +403,7 @@ public final class VoiceCatalog {
             try (TarArchiveInputStream tar = new TarArchiveInputStream(new BZip2CompressorInputStream(counting))) {
                 TarArchiveEntry e;
                 byte[] buf = new byte[1 << 16];
-                while ((e = tar.getNextEntry()) != null) {
+                while ((e = tar.getNextTarEntry()) != null) {
                     if (cancelled[0]) throw new IOException("Anulowano");
                     String name = e.getName();
                     // Usuń katalog główny archiwum (np. "vits-piper-pl_PL-gosia-medium/")
