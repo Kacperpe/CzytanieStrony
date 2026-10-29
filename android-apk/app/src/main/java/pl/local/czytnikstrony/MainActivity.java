@@ -67,7 +67,9 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
     private TextView voicePlLabel, voiceEnLabel, voiceTip;
     private ProgressBar loadingBar, voiceLoading;
     private SeekBar progressSeek;
-    private Button playPauseBtn, updateButton;
+    private Button playPauseBtn, updateButton, miniPlayBtn, expandBtn;
+    private View playerView, playerDetails;
+    private boolean playerExpanded = false;
     private final List<Button> langButtons = new ArrayList<>();
     private final List<Button> rateChips = new ArrayList<>();
     private WebView webView;
@@ -417,7 +419,7 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
     private View buildPlayer() {
         LinearLayout p = new LinearLayout(this);
         p.setOrientation(LinearLayout.VERTICAL);
-        p.setPadding(dp(18), dp(14), dp(18), dp(12));
+        p.setPadding(dp(16), dp(8), dp(8), dp(8));
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(C_SURFACE);
         float r = dp(22);
@@ -425,6 +427,8 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         bg.setStroke(dp(1), C_BORDER);
         p.setBackground(bg);
         p.setElevation(dp(8));
+        playerView = p;
+        playerExpanded = getSharedPreferences("ui", MODE_PRIVATE).getBoolean("player_expanded", false);
 
         LinearLayout titleRow = row();
         nowTitle = new TextView(this);
@@ -437,7 +441,21 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         voiceLoading = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
         voiceLoading.setVisibility(View.GONE);
         titleRow.addView(voiceLoading, new LinearLayout.LayoutParams(dp(18), dp(18)));
+        miniPlayBtn = circleBtn("▶", true);
+        miniPlayBtn.setTextSize(18);
+        LinearLayout.LayoutParams mpl = new LinearLayout.LayoutParams(dp(42), dp(42));
+        mpl.setMargins(dp(8), 0, 0, 0);
+        titleRow.addView(miniPlayBtn, mpl);
+        expandBtn = ghostBtn("▴");
+        expandBtn.setTextSize(16);
+        expandBtn.setTextColor(C_MUTED);
+        titleRow.addView(expandBtn, new LinearLayout.LayoutParams(dp(40), dp(42)));
         p.addView(titleRow);
+
+        LinearLayout details = new LinearLayout(this);
+        details.setOrientation(LinearLayout.VERTICAL);
+        details.setPadding(0, 0, dp(8), dp(4));
+        playerDetails = details;
 
         nowPreview = new TextView(this);
         nowPreview.setTextColor(C_MUTED);
@@ -447,7 +465,7 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         nowPreview.setLineSpacing(dp(2), 1f);
         LinearLayout.LayoutParams pvl = mb(4);
         pvl.setMargins(0, dp(2), 0, dp(4));
-        p.addView(nowPreview, pvl);
+        details.addView(nowPreview, pvl);
 
         LinearLayout prog = row();
         progressSeek = new SeekBar(this);
@@ -457,7 +475,7 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         progressText.setTextSize(11);
         progressText.setTypeface(Typeface.DEFAULT_BOLD);
         prog.addView(progressText);
-        p.addView(prog);
+        details.addView(prog);
 
         LinearLayout ctr = new LinearLayout(this);
         ctr.setOrientation(LinearLayout.HORIZONTAL);
@@ -478,7 +496,7 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         ctr.addView(stop, small);
         LinearLayout.LayoutParams cl = mb(0);
         cl.setMargins(0, dp(4), 0, dp(10));
-        p.addView(ctr, cl);
+        details.addView(ctr, cl);
 
         // Tempo: − [presety] +
         LinearLayout rate = row();
@@ -497,7 +515,7 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(36), dp(32));
         plp.setMargins(dp(4), 0, 0, 0);
         rate.addView(plus, plp);
-        p.addView(rate);
+        details.addView(rate);
 
         rateValue = new TextView(this);
         rateValue.setTextColor(C_MUTED);
@@ -505,7 +523,18 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
         rateValue.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams rv = mb(0);
         rv.setMargins(0, dp(4), 0, 0);
-        p.addView(rateValue, rv);
+        details.addView(rateValue, rv);
+
+        p.addView(details);
+
+        View.OnClickListener toggle = v -> {
+            playerExpanded = !playerExpanded;
+            getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("player_expanded", playerExpanded).apply();
+            onReaderState();
+        };
+        titleRow.setOnClickListener(toggle);
+        expandBtn.setOnClickListener(toggle);
+        miniPlayBtn.setOnClickListener(v -> onPlayPressed());
 
         prev.setOnClickListener(v -> reader.prev());
         next.setOnClickListener(v -> reader.next());
@@ -562,6 +591,12 @@ public class MainActivity extends Activity implements Reader.StateListener, Voic
                 + "  ·  " + formatDuration(reader.remainingSeconds()) : "—");
         }
         playPauseBtn.setText(reader.isPlaying() ? "⏸" : "▶");
+        miniPlayBtn.setText(reader.isPlaying() ? "⏸" : "▶");
+        // Pasek tylko gdy jest co czytać; domyślnie zwinięty do jednego wiersza
+        playerView.setVisibility(has ? View.VISIBLE : View.GONE);
+        playerDetails.setVisibility(playerExpanded ? View.VISIBLE : View.GONE);
+        miniPlayBtn.setVisibility(playerExpanded ? View.GONE : View.VISIBLE);
+        expandBtn.setText(playerExpanded ? "▾" : "▴");
         voiceLoading.setVisibility(reader.isLoading() ? View.VISIBLE : View.GONE);
 
         float rate = reader.getRate();
