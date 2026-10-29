@@ -24,7 +24,7 @@ final class SystemTtsEngine implements SpeechEngine {
     private static final int LOOKAHEAD = 2;
 
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final TextToSpeech tts;
+    private TextToSpeech tts;
     private boolean ready = false;
     private boolean failed = false;
     private final List<Runnable> onReady = new ArrayList<>();
