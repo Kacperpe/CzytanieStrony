@@ -201,7 +201,7 @@ public final class VoiceCatalog {
                 if (!tmp.renameTo(target)) throw new IOException("Nie udało się zapisać głosu");
                 //noinspection ResultOfMethodCallIgnored
                 new File(target, ".ok").createNewFile();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 err = e.getMessage() != null ? e.getMessage() : e.toString();
                 if (tmp != null) rm(tmp);
                 id = null;
@@ -344,7 +344,7 @@ public final class VoiceCatalog {
                     throw new IOException("Niepełne pliki głosu");
                 //noinspection ResultOfMethodCallIgnored
                 new File(target, ".ok").createNewFile();
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 error = cancelled[0] ? "Anulowano" : (e.getMessage() != null ? e.getMessage() : e.toString());
                 rm(tmp);
                 rm(target);

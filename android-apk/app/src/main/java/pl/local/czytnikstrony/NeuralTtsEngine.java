@@ -176,6 +176,15 @@ final class NeuralTtsEngine implements SpeechEngine {
 
         // ── Generator ──
         private void generate() {
+            try {
+                generateLocked();
+            } catch (Throwable e) {
+                String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+                post(() -> listener.onError("Błąd głosu: " + msg));
+            }
+        }
+
+        private void generateLocked() {
             synchronized (lock) {
                 OfflineTts engine;
                 try {
@@ -284,9 +293,12 @@ final class NeuralTtsEngine implements SpeechEngine {
                     }
                 }
             } catch (InterruptedException ignored) {
+            } catch (Throwable e) {
+                String msg = e.getMessage() != null ? e.getMessage() : e.toString();
+                post(() -> listener.onError("Błąd odtwarzania: " + msg));
             } finally {
                 try { t.stop(); } catch (Exception ignored) {}
-                t.release();
+                try { t.release(); } catch (Throwable ignored) {}
                 if (track == t) track = null;
             }
         }

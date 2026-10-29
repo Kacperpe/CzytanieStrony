@@ -46,6 +46,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -69,6 +77,37 @@ fun CzytnikApp(state: AppState, webView: WebView) {
         state.message = null
     }
     BackHandler(enabled = state.playerOpen) { state.playerOpen = false }
+
+    // Raport ostatniego crasha (do przesłania autorowi)
+    var crash by remember { mutableStateOf(CrashLog.read(state.activity)) }
+    crash?.let { report ->
+        AlertDialog(
+            onDismissRequest = { CrashLog.clear(state.activity); crash = null },
+            title = { Text("Aplikacja się zamknęła") },
+            text = {
+                Column {
+                    Text("Skopiuj raport i wyślij go, żeby dało się naprawić błąd.",
+                        style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(10.dp))
+                    Text(report, style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState()))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cb = state.activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cb.setPrimaryClip(android.content.ClipData.newPlainText("crash", report))
+                    CrashLog.clear(state.activity)
+                    crash = null
+                    state.message = "Raport skopiowany"
+                }) { Text("Kopiuj raport") }
+            },
+            dismissButton = {
+                TextButton(onClick = { CrashLog.clear(state.activity); crash = null }) { Text("Zamknij") }
+            }
+        )
+    }
 
     Box(Modifier.fillMaxSize()) {
         // Ukryty WebView do wyciągania artykułów

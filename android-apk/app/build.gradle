@@ -12,8 +12,8 @@ android {
         applicationId "pl.local.czytnikstrony"
         minSdk 23
         targetSdk 35
-        versionCode 4
-        versionName "0.3.0"
+        versionCode 110
+        versionName "1.1.0"
 
         ndk {
             // Telefony: 64- i 32-bit ARM (bez x86 → mniejszy APK)
@@ -78,5 +78,5 @@ dependencies {
     debugImplementation "androidx.compose.ui:ui-tooling"
 
     // Rozpakowywanie paczek głosów (.tar.bz2)
-    implementation "org.apache.commons:commons-compress:1.27.1"
+    implementation "org.apache.commons:commons-compress:1.20"
 }
