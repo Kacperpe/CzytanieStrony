@@ -27,7 +27,15 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build APK
-        run: ./gradlew --no-daemon --stacktrace assembleDebug
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon assembleDebug 2>&1 | tee build.log || {
+            # Wypisz błędy jako adnotacje (widoczne w podsumowaniu runa)
+            grep -E "error:|e: |What went wrong|Could not|> " build.log | head -40 | while IFS= read -r l; do
+              echo "::error::${l//%/%25}"
+            done
+            exit 1
+          }
 
       - name: Collect APK
         run: |
