@@ -14,6 +14,8 @@ import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig;
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig;
 
 import java.io.File;
+
+import kotlin.jvm.functions.Function1;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -133,6 +135,33 @@ final class NeuralTtsEngine implements SpeechEngine {
         return tts;
     }
 
+    // ── Callback z próbkami ──────────────────────────────────────────────
+
+    /**
+     * Callback wołany z C++ po każdym zdaniu. MUSI być nazwaną klasą z metodą
+     * {@code Integer invoke(float[])}: JNI sherpa-onnx szuka dokładnie sygnatury
+     * ([F)Ljava/lang/Integer; — lambda Javy ma tylko invoke(Object) i kończy się
+     * natywnym crashem całej aplikacji.
+     */
+    private static final class SamplesCallback implements Function1<float[], Integer> {
+        private final Session session;
+        private final int chunk;
+
+        SamplesCallback(Session session, int chunk) { this.session = session; this.chunk = chunk; }
+
+        @Override
+        public Integer invoke(float[] samples) {
+            try {
+                if (session.cancelled || samples == null) return 0;
+                Segment seg = new Segment(chunk, samples.clone(), false);
+                while (!session.cancelled && !session.queue.offer(seg, 200, TimeUnit.MILLISECONDS)) { /* czekaj */ }
+                return session.cancelled ? 0 : 1;
+            } catch (Throwable e) {
+                return 0;
+            }
+        }
+    }
+
     // ── Sesja ────────────────────────────────────────────────────────────
 
     private final class Session {
@@ -205,14 +234,7 @@ final class NeuralTtsEngine implements SpeechEngine {
                     final int idx = i;
                     String text = chunks.get(i);
                     try {
-                        engine.generateWithCallback(text, 0, rate, samples -> {
-                            if (cancelled) return 0;
-                            float[] copy = samples.clone();
-                            try {
-                                while (!cancelled && !queue.offer(new Segment(idx, copy, false), 200, TimeUnit.MILLISECONDS)) { /* czekaj */ }
-                            } catch (InterruptedException e) { return 0; }
-                            return cancelled ? 0 : 1;
-                        });
+                        engine.generateWithCallback(text, 0, rate, new SamplesCallback(this, idx));
                     } catch (Throwable e) {
                         String msg = e.getMessage() != null ? e.getMessage() : e.toString();
                         post(() -> listener.onError("Błąd syntezy: " + msg));
