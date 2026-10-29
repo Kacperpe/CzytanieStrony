@@ -12,7 +12,7 @@ import android.graphics.Typeface;
 import java.util.Locale;
 
 /** „Okładka” artykułu: gradient w kolorze zależnym od strony + pierwsza litera domeny. */
-final class Cover {
+public final class Cover {
 
     private Cover() {}
 

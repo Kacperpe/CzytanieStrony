@@ -11,9 +11,9 @@ import android.webkit.WebViewClient;
 import org.json.JSONObject;
 
 /** Wczytuje stronę w (ukrytym) WebView i wyciąga z niej tytuł oraz treść artykułu. */
-final class ArticleExtractor {
+public final class ArticleExtractor {
 
-    interface Callback {
+    public interface Callback {
         void onProgress(int percent);
         void onResult(String title, String text, String errorOrNull);
     }

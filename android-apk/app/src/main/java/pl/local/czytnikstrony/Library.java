@@ -23,9 +23,9 @@ import java.util.UUID;
  * Biblioteka artykułów: historia czytania i kolejka „Czytaj później”.
  * Metadane w library.json, treść każdego artykułu w osobnym pliku.
  */
-final class Library {
+public final class Library {
 
-    static final class Article {
+    public static final class Article {
         String id;
         String title = "";
         String url = "";
@@ -52,7 +52,7 @@ final class Library {
         }
     }
 
-    interface Listener { void onLibraryChanged(); }
+    public interface Listener { void onLibraryChanged(); }
 
     private static Library instance;
 

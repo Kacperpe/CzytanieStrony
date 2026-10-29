@@ -19,7 +19,7 @@ import java.util.Set;
  * Silnik oparty o systemowy TextToSpeech. Kolejkuje kilka fragmentów naprzód
  * (QUEUE_ADD), dzięki czemu między zdaniami nie ma przerw.
  */
-final class SystemTtsEngine implements SpeechEngine {
+public final class SystemTtsEngine implements SpeechEngine {
 
     private static final int LOOKAHEAD = 2;
 

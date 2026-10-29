@@ -36,12 +36,12 @@ import java.util.Map;
  * Katalog naturalnych (neuronowych) głosów Piper w formacie sherpa-onnx
  * oraz ich pobieranie/rozpakowywanie do pamięci aplikacji.
  */
-final class VoiceCatalog {
+public final class VoiceCatalog {
 
     static final String BASE_URL =
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/";
 
-    static final class Model {
+    public static final class Model {
         final String id;       // np. vits-piper-pl_PL-gosia-medium
         final String lang;     // "pl" / "en"
         final String name;     // nazwa wyświetlana
@@ -128,7 +128,7 @@ final class VoiceCatalog {
 
     // ── Import własnego głosu Piper (.onnx + .onnx.json) ─────────────────
 
-    interface ImportListener { void onDone(String idOrNull, String errorOrNull); }
+    public interface ImportListener { void onDone(String idOrNull, String errorOrNull); }
 
     static void importCustom(Context ctx, Uri onnx, Uri json, ImportListener l) {
         Context app = ctx.getApplicationContext();
@@ -297,7 +297,7 @@ final class VoiceCatalog {
 
     // ── Pobieranie ───────────────────────────────────────────────────────
 
-    interface DownloadListener {
+    public interface DownloadListener {
         void onProgress(String id, long done, long total);
         void onDone(String id, String errorOrNull);
     }

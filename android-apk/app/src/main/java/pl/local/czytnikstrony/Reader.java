@@ -23,9 +23,9 @@ import java.util.Locale;
  * fragmenty, stan odtwarzania i ustawienia. Ekran główny, panel z kafelka
  * i powiadomienie tylko nim sterują — dzięki temu czytanie trwa w tle.
  */
-final class Reader {
+public final class Reader {
 
-    interface StateListener { void onReaderState(); }
+    public interface StateListener { void onReaderState(); }
 
     static final String VOICE_SYSTEM_AUTO = "system";
     static final String VOICE_SYSTEM_PREFIX = "system:";

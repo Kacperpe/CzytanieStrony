@@ -7,7 +7,7 @@ import java.util.List;
  * Wszystkie metody wołane są z wątku głównego, a callbacki Listenera
  * również trafiają na wątek główny.
  */
-interface SpeechEngine {
+public interface SpeechEngine {
 
     interface Listener {
         /** Zaczął się fragment o danym indeksie. */
