@@ -43,6 +43,17 @@ public class PlayerService extends Service implements Reader.StateListener {
     private boolean foreground = false;
     private boolean noisyRegistered = false;
     private Bitmap largeIcon;
+    private String coverKey = "";
+
+    /** Okładka bieżącego artykułu (przeliczana tylko przy zmianie). */
+    private Bitmap cover() {
+        String key = reader.getDomain() + "|" + reader.displayTitle();
+        if (!key.equals(coverKey) || largeIcon == null) {
+            coverKey = key;
+            largeIcon = reader.hasContent() ? Cover.bitmap(reader.getDomain(), reader.displayTitle(), 256) : createLargeIcon();
+        }
+        return largeIcon;
+    }
 
     private final BroadcastReceiver noisyReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
@@ -55,7 +66,6 @@ public class PlayerService extends Service implements Reader.StateListener {
         super.onCreate();
         reader = Reader.get(this);
         createChannel();
-        largeIcon = createLargeIcon();
         mediaSession = new MediaSession(this, "CzytnikStrony");
         mediaSession.setCallback(new MediaSession.Callback() {
             @Override public void onPlay()             { if (!reader.isPlaying()) reader.togglePlayPause(); }
@@ -65,6 +75,10 @@ public class PlayerService extends Service implements Reader.StateListener {
             @Override public void onFastForward()      { reader.next(); }
             @Override public void onRewind()           { reader.prev(); }
             @Override public void onStop()             { reader.stop(); }
+            @Override public void onSeekTo(long pos) {
+                int d = reader.durationSeconds();
+                if (d > 0) reader.seekFraction(pos / 1000f / d);
+            }
         });
         mediaSession.setActive(true);
         reader.addListener(this);
@@ -126,13 +140,16 @@ public class PlayerService extends Service implements Reader.StateListener {
         mediaSession.setPlaybackState(new PlaybackState.Builder()
             .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_STOP
-                | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS)
-            .setState(state, reader.getIndex(), reader.isPlaying() ? 1f : 0f)
+                | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                | PlaybackState.ACTION_SEEK_TO)
+            .setState(state, reader.positionSeconds() * 1000L, reader.isPlaying() ? reader.getRate() : 0f)
             .build());
         mediaSession.setMetadata(new MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, reader.displayTitle())
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, "Czytnik strony")
-            .putBitmap(MediaMetadata.METADATA_KEY_ART, largeIcon)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, reader.getDomain().isEmpty() ? "Czytnik strony" : reader.getDomain())
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, reader.getDomain())
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, reader.durationSeconds() * 1000L)
+            .putBitmap(MediaMetadata.METADATA_KEY_ART, cover())
             .build());
     }
 
@@ -187,7 +204,7 @@ public class PlayerService extends Service implements Reader.StateListener {
         Notification.Builder b = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
             ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_reader_tile)
-            .setLargeIcon(largeIcon)
+            .setLargeIcon(cover())
             .setContentTitle(reader.displayTitle().isEmpty() ? "Czytnik strony" : reader.displayTitle())
             .setContentText(preview.isEmpty() ? reader.getStatus() : preview)
             .setSubText(sub)

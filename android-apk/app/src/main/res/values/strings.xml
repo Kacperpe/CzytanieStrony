@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Czytnik strony</string>
+    <string name="widget_desc">Odtwarzacz czytanych artykułów</string>
 </resources>

@@ -63,6 +63,18 @@ final class Reader {
     private String status = "";
     private String activeLang = "pl";
     private boolean previewMode = false;
+    private String url = "";
+    private String articleId = null;
+    private int version = 0;
+
+    // ── Timer snu ────────────────────────────────────────────────────────
+    private long sleepAt = 0;              // 0 = wyłączony
+    private boolean sleepEndOfArticle = false;
+    private final Runnable sleepRunnable = () -> {
+        sleepAt = 0;
+        if (playing) pause();
+        setStatus("Timer snu — pauza");
+    };
 
     // ── Ustawienia ───────────────────────────────────────────────────────
     private float rate;
@@ -92,6 +104,8 @@ final class Reader {
         if (!last.isEmpty()) {
             text = last;
             title = prefs.getString("last_title", "");
+            url = prefs.getString("last_url", "");
+            articleId = prefs.getString("last_article", null);
             rebuildChunks(resolveLang(text));
             index = Math.max(0, Math.min(prefs.getInt("last_index", 0), Math.max(0, chunks.size() - 1)));
         }
@@ -103,8 +117,13 @@ final class Reader {
     void removeListener(StateListener l) { listeners.remove(l); }
 
     private void notifyState() {
+        version++;
         for (StateListener l : new ArrayList<>(listeners)) l.onReaderState();
+        ReaderWidget.update(app);
     }
+
+    /** Licznik zmian stanu (do odświeżania UI w Compose). */
+    int version() { return version; }
 
     private void setStatus(String s) { status = s; notifyState(); }
 
@@ -112,6 +131,70 @@ final class Reader {
 
     String getText()        { return text; }
     String getTitle()       { return title; }
+    String getUrl()         { return url; }
+    String getDomain()      { return Library.domainOf(url); }
+    String getArticleId()   { return articleId; }
+    String chunk(int i)     { return i >= 0 && i < chunks.size() ? chunks.get(i) : ""; }
+
+    // ── Czas (szacowany: ~15 znaków/s przy 1.0x) ─────────────────────────
+    private static final float CHARS_PER_SEC = 15f;
+
+    int durationSeconds() {
+        if (chunks.isEmpty()) return 0;
+        return Math.round(charsBefore(chunks.size()) / (CHARS_PER_SEC * rate));
+    }
+
+    int positionSeconds() { return Math.round(charsBefore(index) / (CHARS_PER_SEC * rate)); }
+
+    private int charsBefore(int i) {
+        int c = 0;
+        for (int k = 0; k < Math.min(i, chunks.size()); k++) c += chunks.get(k).length() + 1;
+        return c;
+    }
+
+    /** Przewija o deltaSec sekund (±15 s itp.). */
+    void seekSeconds(int deltaSec) {
+        if (chunks.isEmpty()) return;
+        int target = charsBefore(index) + Math.round(deltaSec * CHARS_PER_SEC * rate);
+        int i = 0, c = 0;
+        while (i < chunks.size() - 1 && c + chunks.get(i).length() + 1 <= target) { c += chunks.get(i).length() + 1; i++; }
+        if (deltaSec < 0 && i == index && index > 0) i = index - 1;
+        if (deltaSec > 0 && i == index && index < chunks.size() - 1) i = index + 1;
+        seek(i);
+    }
+
+    /** Ułamek 0..1 → fragment. */
+    void seekFraction(float f) {
+        if (chunks.isEmpty()) return;
+        int target = Math.round(f * charsBefore(chunks.size()));
+        int i = 0, c = 0;
+        while (i < chunks.size() - 1 && c + chunks.get(i).length() + 1 <= target) { c += chunks.get(i).length() + 1; i++; }
+        seek(i);
+    }
+
+    // ── Timer snu ────────────────────────────────────────────────────────
+
+    /** minutes > 0 = za tyle minut; 0 = wyłącz; -1 = koniec artykułu. */
+    void setSleepTimer(int minutes) {
+        main.removeCallbacks(sleepRunnable);
+        sleepAt = 0;
+        sleepEndOfArticle = false;
+        if (minutes > 0) {
+            sleepAt = System.currentTimeMillis() + minutes * 60_000L;
+            main.postDelayed(sleepRunnable, minutes * 60_000L);
+        } else if (minutes < 0) {
+            sleepEndOfArticle = true;
+        }
+        notifyState();
+    }
+
+    boolean isSleepEndOfArticle() { return sleepEndOfArticle; }
+
+    /** Pozostałe sekundy timera (0 = wyłączony). */
+    int sleepRemainingSeconds() {
+        if (sleepAt == 0) return 0;
+        return (int) Math.max(0, (sleepAt - System.currentTimeMillis()) / 1000);
+    }
     String getStatus()      { return status; }
     int getIndex()          { return index; }
     int getChunkCount()     { return chunks.size(); }
@@ -203,17 +286,48 @@ final class Reader {
 
     /** Czyta nowy tekst od znaku startOffset (0 = od początku). */
     void play(String rawText, String newTitle, int startOffset) {
+        play(rawText, newTitle, "", startOffset);
+    }
+
+    /** Czyta tekst i zapisuje go w bibliotece (historia, postęp). */
+    void play(String rawText, String newTitle, String newUrl, int startOffset) {
         String clean = cleanText(rawText);
         if (clean.isEmpty()) { setStatus("Brak tekstu do czytania."); return; }
+        Library.Article a = Library.get(app).upsert(newTitle, newUrl, clean, false);
+        load(a.id, clean, newTitle, newUrl);
+        index = indexForOffset(startOffset);
+        Library.get(app).markReading(a.id, chunks.size());
+        persistText();
+        startAt(index, activeLang);
+    }
+
+    /** Odtwarza artykuł z biblioteki od zapisanego miejsca. */
+    boolean playArticle(String id) {
+        Library lib = Library.get(app);
+        Library.Article a = lib.get(id);
+        String t = a != null ? lib.text(id) : null;
+        if (t == null) return false;
+        if (id.equals(articleId) && hasContent()) {
+            if (!isActive()) startAt(index >= chunks.size() ? 0 : index, activeLang);
+            else if (paused) resume();
+            return true;
+        }
+        load(id, t, a.title, a.url);
+        index = a.finished ? 0 : Math.max(0, Math.min(a.index, chunks.size() - 1));
+        lib.markReading(id, chunks.size());
+        persistText();
+        startAt(index, activeLang);
+        return true;
+    }
+
+    private void load(String id, String clean, String newTitle, String newUrl) {
         stopEngine();
         previewMode = false;
+        articleId = id;
         text = clean;
         title = newTitle != null ? newTitle.trim() : "";
-        String lang = resolveLang(text);
-        rebuildChunks(lang);
-        index = indexForOffset(startOffset);
-        persistText();
-        startAt(index, lang);
+        url = newUrl != null ? newUrl : "";
+        rebuildChunks(resolveLang(text));
     }
 
     /** Wznawia lub zaczyna czytanie aktualnego tekstu. */
@@ -338,7 +452,7 @@ final class Reader {
                 if (engine != activeEngine) return;
                 loading = false;
                 index = i;
-                if (i % 5 == 0) persistIndex();
+                if (i % 3 == 0) persistIndex();
                 setStatus(statusReading());
             }
             @Override public void onFinished() {
@@ -346,11 +460,24 @@ final class Reader {
                 playing = false;
                 paused = false;
                 loading = false;
-                index = 0;
                 activeEngine = null;
+                if (articleId != null) Library.get(app).markFinished(articleId);
+                index = 0;
+                persistIndex();
+                if (sleepEndOfArticle) {
+                    sleepEndOfArticle = false;
+                    abandonFocus();
+                    releaseWakeLock();
+                    setStatus("Timer snu — koniec artykułu");
+                    return;
+                }
+                Library.Article next = Library.get(app).nextQueued();
+                if (next != null && playArticle(next.id)) {
+                    setStatus("Następny z kolejki");
+                    return;
+                }
                 abandonFocus();
                 releaseWakeLock();
-                persistIndex();
                 setStatus("Koniec czytania");
             }
             @Override public void onError(String m) {
@@ -519,21 +646,28 @@ final class Reader {
 
     private void persistText() {
         String keep = text.length() > 300_000 ? "" : text;
-        prefs.edit().putString("last_text", keep).putString("last_title", title).putInt("last_index", index).apply();
+        prefs.edit().putString("last_text", keep).putString("last_title", title).putInt("last_index", index)
+            .putString("last_url", url).putString("last_article", articleId).apply();
     }
 
-    private void persistIndex() { prefs.edit().putInt("last_index", index).apply(); }
+    private void persistIndex() {
+        prefs.edit().putInt("last_index", index).apply();
+        if (articleId != null && !previewMode) Library.get(app).setProgress(articleId, index, chunks.size());
+    }
 
     /** Czyści zapamiętany tekst (przycisk „Wyczyść”). */
     void clear() {
         stop();
         text = "";
         title = "";
+        url = "";
+        articleId = null;
         chunks = Collections.emptyList();
         starts.clear();
         ends.clear();
         index = 0;
-        prefs.edit().remove("last_text").remove("last_title").remove("last_index").apply();
+        prefs.edit().remove("last_text").remove("last_title").remove("last_index")
+            .remove("last_url").remove("last_article").apply();
         setStatus("Gotowy");
     }
 
