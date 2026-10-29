@@ -10,7 +10,6 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
-import android.speech.tts.TextToSpeech;
 import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.Window;
@@ -20,49 +19,51 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import java.util.Locale;
-
-public class FloatingReaderActivity extends Activity implements TextToSpeech.OnInitListener {
+public class FloatingReaderActivity extends Activity implements Reader.StateListener {
 
     private int C_SURFACE, C_SURFACE2, C_PRIMARY, C_PRIMARY_DIM, C_ON_PRIMARY;
     private int C_TEXT, C_MUTED, C_BORDER, C_DANGER, C_DANGER_BG;
 
     private TextView statusText;
     private TextView clipPreview;
-    private TextToSpeech tts;
-    private boolean ttsReady = false;
-    private float speechRate = 0.95f;
+    private Reader reader;
+    private Button playBtn;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         initColors();
         configureWindow();
+        reader = Reader.get(this);
         buildUi();
-        tts = new TextToSpeech(this, this);
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        refreshClipPreview();
+    protected void onStart() {
+        super.onStart();
+        reader.addListener(this);
+        onReaderState();
     }
 
     @Override
-    protected void onDestroy() {
-        if (tts != null) { tts.stop(); tts.shutdown(); }
-        super.onDestroy();
+    protected void onStop() {
+        // Czytanie trwa dalej po zamknięciu panelu.
+        reader.removeListener(this);
+        super.onStop();
     }
 
     @Override
-    public void onInit(int status) {
-        ttsReady = (status == TextToSpeech.SUCCESS);
-        if (ttsReady) {
-            tts.setLanguage(new Locale("pl", "PL"));
-            applySpeechRate();
-            setStatus("Gotowy.");
-        } else {
-            setStatus("TTS niedostępny.");
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // Android 10+ pozwala czytać schowek dopiero gdy okno ma fokus
+        if (hasFocus) refreshClipPreview();
+    }
+
+    @Override
+    public void onReaderState() {
+        setStatus(reader.isActive() ? reader.getStatus() + " — " + reader.displayTitle() : reader.getStatus());
+        if (playBtn != null) {
+            playBtn.setText(reader.isPlaying() ? "⏸  Pauza" : reader.isPaused() ? "▶  Wznów" : "▶  Czytaj schowek");
         }
     }
 
@@ -188,7 +189,8 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         LinearLayout row1 = new LinearLayout(this);
         row1.setOrientation(LinearLayout.HORIZONTAL);
 
-        Button readBtn = btnPrimary("▶  Czytaj");
+        Button readBtn = btnPrimary("▶  Czytaj schowek");
+        playBtn = readBtn;
         Button stopBtn = btnDanger("⏹  Stop");
 
         LinearLayout.LayoutParams rblp = new LinearLayout.LayoutParams(0, dp(46), 1f);
@@ -239,12 +241,14 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         root.addView(rateRow);
 
         // ── Zdarzenia ─────────────────────────────────────────────────────────
-        readBtn.setOnClickListener(v  -> readClipboard());
-        stopBtn.setOnClickListener(v  -> { if (tts != null) tts.stop(); setStatus("Zatrzymano."); });
+        readBtn.setOnClickListener(v  -> {
+            if (reader.isActive()) reader.togglePlayPause(); else readClipboard();
+        });
+        stopBtn.setOnClickListener(v  -> reader.stop());
         openBtn.setOnClickListener(v  -> openFullReader());
-        slowBtn.setOnClickListener(v  -> setRate(0.70f, "wolno"));
-        normalBtn.setOnClickListener(v -> setRate(0.95f, "normalne"));
-        fastBtn.setOnClickListener(v  -> setRate(1.40f, "szybko"));
+        slowBtn.setOnClickListener(v  -> reader.setRate(0.8f));
+        normalBtn.setOnClickListener(v -> reader.setRate(1.0f));
+        fastBtn.setOnClickListener(v  -> reader.setRate(1.4f));
 
         setContentView(root);
     }
@@ -267,13 +271,13 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
 
     private void readClipboard() {
         String text = getClipboardText();
-        if (text.isEmpty()) { setStatus("Schowek jest pusty."); return; }
-        if (!ttsReady)      { setStatus("TTS nie jest jeszcze gotowy."); return; }
-        Locale locale = detectLocale(text);
-        tts.setLanguage(locale);
-        applySpeechRate();
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "floating");
-        setStatus("Czytam • " + locale.toLanguageTag());
+        if (text.isEmpty()) { setStatus("Schowek jest pusty — skopiuj tekst lub adres."); return; }
+        if (text.matches("(?s)\\s*https?://\\S+\\s*")) {
+            // adres strony — wyciąganie artykułu robi pełny czytnik
+            openFullReader();
+            return;
+        }
+        reader.play(text, "", 0);
     }
 
     private void openFullReader() {
@@ -289,16 +293,6 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         finish();
     }
 
-    private void setRate(float rate, String label) {
-        speechRate = rate;
-        applySpeechRate();
-        setStatus("Tempo: " + label + " (" + rate + "×)");
-    }
-
-    private void applySpeechRate() {
-        if (tts != null && ttsReady) tts.setSpeechRate(speechRate);
-    }
-
     private String getClipboardText() {
         ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (cb == null || !cb.hasPrimaryClip()) return "";
@@ -306,19 +300,6 @@ public class FloatingReaderActivity extends Activity implements TextToSpeech.OnI
         if (clip == null || clip.getItemCount() == 0) return "";
         CharSequence text = clip.getItemAt(0).coerceToText(this);
         return text == null ? "" : text.toString().trim();
-    }
-
-    private Locale detectLocale(String text) {
-        String sample = " " + text.substring(0, Math.min(3000, text.length())).toLowerCase(Locale.ROOT) + " ";
-        int en = count(sample, new String[]{" the ", " and ", " is ", " are ", " with ", " from ", " that ", " this ", " you ", " for "});
-        int pl = count(sample, new String[]{" ze ", " nie ", " jest ", " się ", " na ", " do ", " oraz ", " który ", "ą", "ć", "ę", "ł", "ń", "ó", "ś", "ź", "ż"});
-        return en > pl ? Locale.US : new Locale("pl", "PL");
-    }
-
-    private int count(String sample, String[] markers) {
-        int c = 0;
-        for (String m : markers) if (sample.contains(m)) c++;
-        return c;
     }
 
     private void setStatus(String msg) {

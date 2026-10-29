@@ -1,11 +1,13 @@
 package pl.local.czytnikstrony;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.StatusBarManager;
-import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.res.Configuration;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -13,8 +15,8 @@ import android.graphics.drawable.Icon;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.speech.tts.TextToSpeech;
-import android.speech.tts.UtteranceProgressListener;
+import android.os.Handler;
+import android.os.Looper;
 import android.speech.tts.Voice;
 import android.text.Editable;
 import android.text.InputType;
@@ -23,146 +25,121 @@ import android.text.TextUtils;
 import android.text.style.BackgroundColorSpan;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
-import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import org.json.JSONObject;
 
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
-public class MainActivity extends Activity implements TextToSpeech.OnInitListener {
-
-    private static final int   MAX_CHUNK = 260;
-    private static final float DEF_RATE  = 0.92f;
+public class MainActivity extends Activity implements Reader.StateListener, VoiceCatalog.DownloadListener {
 
     private static final String GITHUB_OWNER = "Kacperpe";
     private static final String GITHUB_REPO  = "CzytanieStrony";
+    private static final int REQ_IMPORT = 41;
 
-    // ── Paleta kolorów ───────────────────────────────────────────────────────
+    private static final float[] RATE_PRESETS = {0.8f, 1.0f, 1.25f, 1.5f, 1.75f};
+
+    // ── Paleta ───────────────────────────────────────────────────────────
     private int C_BG, C_SURFACE, C_SURFACE2, C_PRIMARY, C_PRIMARY_DIM, C_ON_PRIMARY;
-    private int C_TEXT, C_MUTED, C_BORDER, C_DANGER, C_DANGER_BG;
+    private int C_TEXT, C_MUTED, C_BORDER, C_DANGER, C_DANGER_BG, C_HIGHLIGHT;
 
-    // ── Views ────────────────────────────────────────────────────────────────
-    private EditText     urlInput;
-    private EditText     textInput;
-    private TextView     statusText;
-    private TextView     rateText;
-    private TextView     progressText;
-    private TextView     nowPlayingTitle;
-    private TextView     nowPlayingPreview;
-    private WebView      webView;
-    private ProgressBar  loadingBar;
-    private SeekBar      rateSeekBar;
-    private SeekBar      progressSeekBar;
-    private Spinner      languageSpinner;
-    private Spinner      voiceSpinner;
-    private LinearLayout settingsPanel;
-    private Button       playPauseButton;
-    private Button       updateButton;
+    private Reader reader;
+    private final Handler main = new Handler(Looper.getMainLooper());
 
-    // ── Stan TTS ─────────────────────────────────────────────────────────────
-    private TextToSpeech         tts;
-    private final List<Voice>    allVoices   = new ArrayList<>();
-    private final List<Voice>    voices      = new ArrayList<>();
-    private final List<String>   voiceLabels = new ArrayList<>();
-    private String  selectedLanguageCode = "auto";
-    private String  selectedVoiceName    = "";
-    private float   speechRate           = DEF_RATE;
-    private boolean ttsReady       = false;
-    private boolean readingQueue    = false;
-    private boolean paused          = false;
-    private List<String>       currentChunks      = new ArrayList<>();
-    private final List<Integer> currentChunkStarts = new ArrayList<>();
-    private final List<Integer> currentChunkEnds   = new ArrayList<>();
-    private int     currentChunkIndex = 0;
-    private boolean settingsVisible   = false;
-    private String  currentTitle      = "";
-    private BackgroundColorSpan currentChunkSpan;
+    // ── Widoki ───────────────────────────────────────────────────────────
+    private EditText urlInput, textInput;
+    private TextView statusText, nowTitle, nowPreview, progressText, rateValue, textMeta;
+    private TextView voicePlLabel, voiceEnLabel, voiceTip;
+    private ProgressBar loadingBar, voiceLoading;
+    private SeekBar progressSeek;
+    private Button playPauseBtn, updateButton;
+    private final List<Button> langButtons = new ArrayList<>();
+    private final List<Button> rateChips = new ArrayList<>();
+    private WebView webView;
 
-    private final BroadcastReceiver controlReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(android.content.Context context, Intent intent) {
-            String action = intent.getStringExtra(PlayerService.KEY_NOTIF_ACTION);
-            if (action != null) handleNotifAction(action);
-        }
-    };
+    private String shownText = null;           // referencja tekstu z Readera pokazanego w polu
+    private BackgroundColorSpan highlight;
+    private int highlightedIndex = -2;
+    private boolean userSeeking = false;
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  Lifecycle
-    // ════════════════════════════════════════════════════════════════════════
+    // Okno wyboru głosu
+    private AlertDialog voiceDialog;
+    private LinearLayout voiceList;
+    private String voiceDialogLang;
+    private long lastListRender = 0;
+
+    private Runnable extractTimeout;
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Cykl życia
+    // ════════════════════════════════════════════════════════════════════
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        reader = Reader.get(this);
         initColors();
         buildUi();
         configureWebView();
-        tts = new TextToSpeech(this, this);
-        handleIncomingIntent(getIntent());
-        checkForUpdate();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 0);
         }
-        IntentFilter filter = new IntentFilter(PlayerService.ACTION_CONTROL_EVENT);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(controlReceiver, filter, RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(controlReceiver, filter, PlayerService.INTERNAL_BROADCAST_PERMISSION, null);
-        }
+        reader.systemEngine.whenReady(this::onReaderState);
+        handleIncomingIntent(getIntent());
+        checkForUpdate();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        reader.addListener(this);
+        VoiceCatalog.addListener(this);
+        onReaderState();
+    }
+
+    @Override
+    protected void onStop() {
+        reader.removeListener(this);
+        VoiceCatalog.removeListener(this);
+        super.onStop();
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (intent == null) return;
-        String notifAction = intent.getStringExtra(PlayerService.KEY_NOTIF_ACTION);
-        if (notifAction != null) { handleNotifAction(notifAction); return; }
+        setIntent(intent);
         handleIncomingIntent(intent);
-    }
-
-    private void handleNotifAction(String action) {
-        switch (action) {
-            case PlayerService.NOTIF_ACTION_PLAY_PAUSE: handlePlayPause(); break;
-            case PlayerService.NOTIF_ACTION_PREV:       goToPrevChunk();   break;
-            case PlayerService.NOTIF_ACTION_NEXT:       goToNextChunk();   break;
-            case PlayerService.NOTIF_ACTION_STOP:       stopReading();     break;
-        }
     }
 
     @Override
     protected void onDestroy() {
-        try { unregisterReceiver(controlReceiver); } catch (Exception ignored) {}
-        if (tts != null) { tts.stop(); tts.shutdown(); }
-        PlayerService.hide(this);
+        // Czytanie trwa dalej w tle (serwis) — sprzątamy tylko WebView.
         if (webView != null) {
             webView.stopLoading();
-            webView.setWebChromeClient(null);
-            webView.setWebViewClient(null);
             webView.destroy();
             webView = null;
         }
         super.onDestroy();
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  Paleta kolorów — inspiracja: Material You + odcienie szmaragdu
-    // ════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
+    //  Kolory
+    // ════════════════════════════════════════════════════════════════════
 
     private boolean isDarkMode() {
         int mask = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
@@ -171,582 +148,970 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
 
     private void initColors() {
         if (isDarkMode()) {
-            C_BG          = 0xFF0C0D14;
-            C_SURFACE     = 0xFF13152A;
-            C_SURFACE2    = 0xFF1C1E38;
-            C_PRIMARY     = 0xFF7B6CF6;
-            C_PRIMARY_DIM = 0xFF1A1940;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFFE8E9FF;
-            C_MUTED       = 0xFF8B8AC0;
-            C_BORDER      = 0xFF2A2C4A;
-            C_DANGER      = 0xFFFF6B6B;
-            C_DANGER_BG   = 0xFF2C1515;
+            C_BG = 0xFF0C0D14; C_SURFACE = 0xFF151729; C_SURFACE2 = 0xFF1E2038;
+            C_PRIMARY = 0xFF8B7DFA; C_PRIMARY_DIM = 0xFF24224D; C_ON_PRIMARY = 0xFF0C0D14;
+            C_TEXT = 0xFFECECFF; C_MUTED = 0xFF9796C8; C_BORDER = 0xFF2B2D4D;
+            C_DANGER = 0xFFFF7B7B; C_DANGER_BG = 0xFF2E1719; C_HIGHLIGHT = 0x668B7DFA;
         } else {
-            C_BG          = 0xFFF3F2FF;
-            C_SURFACE     = 0xFFFFFFFF;
-            C_SURFACE2    = 0xFFEEEDFF;
-            C_PRIMARY     = 0xFF5B4AE8;
-            C_PRIMARY_DIM = 0xFFECEBFF;
-            C_ON_PRIMARY  = 0xFFFFFFFF;
-            C_TEXT        = 0xFF1A1535;
-            C_MUTED       = 0xFF6B6898;
-            C_BORDER      = 0xFFD0CEEE;
-            C_DANGER      = 0xFFC0392B;
-            C_DANGER_BG   = 0xFFFFF0EE;
+            C_BG = 0xFFF4F3FB; C_SURFACE = 0xFFFFFFFF; C_SURFACE2 = 0xFFF0EFFA;
+            C_PRIMARY = 0xFF5B4AE8; C_PRIMARY_DIM = 0xFFE9E6FF; C_ON_PRIMARY = 0xFFFFFFFF;
+            C_TEXT = 0xFF1A1535; C_MUTED = 0xFF65628E; C_BORDER = 0xFFDCDAF0;
+            C_DANGER = 0xFFC0392B; C_DANGER_BG = 0xFFFFEFEC; C_HIGHLIGHT = 0x4D5B4AE8;
         }
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  TTS init
-    // ════════════════════════════════════════════════════════════════════════
-
-    @Override
-    public void onInit(int status) {
-        ttsReady = (status == TextToSpeech.SUCCESS);
-        if (!ttsReady) { setStatus("TTS niedostępny na tym urządzeniu."); return; }
-
-        tts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-            @Override public void onStart(String id) {}
-
-            @Override
-            public void onDone(String id) {
-                runOnUiThread(() -> {
-                    if (readingQueue && !paused) {
-                        currentChunkIndex++;
-                        updateProgress();
-                        speakNextChunk();
-                    }
-                });
-            }
-
-            @Override
-            public void onError(String id) {
-                runOnUiThread(() -> {
-                    readingQueue = false;
-                    setStatus("Błąd czytania.");
-                    updatePlayPauseBtn();
-                });
-            }
-
-            @Override public void onStop(String id, boolean interrupted) {}
-        });
-
-        loadVoices();
-        setStatus("Gotowy");
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Budowanie UI
-    // ════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
+    //  Budowa UI
+    // ════════════════════════════════════════════════════════════════════
 
     private void buildUi() {
+        LinearLayout screen = new LinearLayout(this);
+        screen.setOrientation(LinearLayout.VERTICAL);
+        screen.setBackgroundColor(C_BG);
+        screen.setFitsSystemWindows(true);
+
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(C_BG);
-
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(20), dp(18), dp(32));
+        root.setPadding(dp(16), dp(18), dp(16), dp(16));
         scroll.addView(root, new ScrollView.LayoutParams(-1, -2));
+        screen.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        // ── Header ──────────────────────────────────────────────────────────
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
+        root.addView(buildHeader(), mb(16));
+        root.addView(buildSourceCard(), mb(12));
+        root.addView(buildTextCard(), mb(12));
+        root.addView(buildVoiceCard(), mb(12));
 
-        LinearLayout titleCol = new LinearLayout(this);
-        titleCol.setOrientation(LinearLayout.VERTICAL);
-
-        TextView appName = new TextView(this);
-        appName.setText("Czytnik");
-        appName.setTextColor(C_TEXT);
-        appName.setTextSize(28);
-        appName.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            appName.setLetterSpacing(-0.02f);
-        }
-        titleCol.addView(appName);
-
-        statusText = new TextView(this);
-        statusText.setText("Startuje…");
-        statusText.setTextColor(C_PRIMARY);
-        statusText.setTextSize(12);
-        statusText.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-        LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(-1, -2);
-        stlp.setMargins(0, dp(1), 0, 0);
-        titleCol.addView(statusText, stlp);
-
-        header.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1f));
-
-        // Baner aktualizacji (pill w nagłówku)
-        updateButton = new Button(this);
-        updateButton.setText("↑ Aktualizacja");
-        updateButton.setAllCaps(false);
-        updateButton.setTextSize(11);
-        updateButton.setTypeface(Typeface.DEFAULT_BOLD);
-        updateButton.setTextColor(C_ON_PRIMARY);
-        updateButton.setBackground(mkRound(C_PRIMARY, 0, 16));
-        updateButton.setPadding(dp(12), dp(6), dp(12), dp(6));
-        updateButton.setVisibility(View.GONE);
-        LinearLayout.LayoutParams ulp = new LinearLayout.LayoutParams(-2, -2);
-        ulp.setMargins(dp(8), 0, 0, 0);
-        ulp.gravity = Gravity.CENTER_VERTICAL;
-        header.addView(updateButton, ulp);
-
-        root.addView(header, mbottom(dp(20)));
-
-        // ── Karta URL ──
-        root.addView(buildUrlCard(), mbottom(dp(10)));
-
-        // WebView ukryty (1×1 px)
-        webView = new WebView(this);
-        webView.setVisibility(View.GONE);
-        root.addView(webView, new LinearLayout.LayoutParams(1, 1));
-
-        // ── Karta tekstu ──
-        root.addView(buildTextCard(), mbottom(dp(10)));
-
-        // ── Player (hero) ──
-        root.addView(buildPlayer(), mbottom(dp(10)));
-
-        // ── Ustawienia głosu (zwijane) ──
-        root.addView(buildSettingsToggle());
-        settingsPanel = buildSettingsPanel();
-        settingsPanel.setVisibility(View.GONE);
-        root.addView(settingsPanel, mbottom(dp(10)));
-
-        // ── Link do kafelka szybkich ustawień ──
         TextView tileLink = new TextView(this);
-        tileLink.setText("+ Dodaj kafelek szybkich ustawień");
+        tileLink.setText("＋ Dodaj kafelek „Czytnik” do szybkich ustawień");
         tileLink.setTextColor(C_MUTED);
         tileLink.setTextSize(12);
-        tileLink.setPadding(dp(4), dp(8), dp(4), dp(4));
-        tileLink.setClickable(true);
+        tileLink.setPadding(dp(4), dp(6), dp(4), dp(6));
         tileLink.setOnClickListener(v -> requestTile());
         root.addView(tileLink);
 
-        setContentView(scroll);
+        webView = new WebView(this);
+        webView.setVisibility(View.INVISIBLE);
+        root.addView(webView, new LinearLayout.LayoutParams(dp(360), 1));
 
-        // Pasek systemu
+        screen.addView(buildPlayer(), new LinearLayout.LayoutParams(-1, -2));
+
+        setContentView(screen);
         getWindow().setStatusBarColor(C_BG);
-        getWindow().setNavigationBarColor(C_BG);
+        getWindow().setNavigationBarColor(C_SURFACE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.view.WindowInsetsController wic = getWindow().getInsetsController();
             if (wic != null) {
-                int flag = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
-                int navFlag = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                int bothFlags = flag | navFlag;
-                wic.setSystemBarsAppearance(isDarkMode() ? 0 : bothFlags, bothFlags);
+                int both = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                wic.setSystemBarsAppearance(isDarkMode() ? 0 : both, both);
             }
+        } else if (!isDarkMode()) {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
     }
 
-    // ── Karta URL ────────────────────────────────────────────────────────────
+    private View buildHeader() {
+        LinearLayout header = row();
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
 
-    private LinearLayout buildUrlCard() {
-        LinearLayout card = surfaceCard();
+        TextView name = new TextView(this);
+        name.setText("Czytnik");
+        name.setTextColor(C_TEXT);
+        name.setTextSize(26);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        name.setLetterSpacing(-0.02f);
+        col.addView(name);
 
-        TextView label = sectionLabel("ADRES STRONY");
-        root_add_with_bottom(card, label, dp(8));
+        statusText = new TextView(this);
+        statusText.setTextColor(C_MUTED);
+        statusText.setTextSize(12);
+        col.addView(statusText);
+        header.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
+        updateButton = pill("↑ Aktualizacja", true);
+        updateButton.setVisibility(View.GONE);
+        header.addView(updateButton, new LinearLayout.LayoutParams(-2, dp(34)));
+        return header;
+    }
 
+    private View buildSourceCard() {
+        LinearLayout card = card();
+        card.addView(label("STRONA INTERNETOWA"), mb(8));
+
+        LinearLayout r = row();
         urlInput = new EditText(this);
         urlInput.setSingleLine(true);
-        urlInput.setHint("https://...");
-        urlInput.setTextColor(C_TEXT);
-        urlInput.setHintTextColor(C_MUTED);
-        urlInput.setTextSize(14);
-        urlInput.setPadding(dp(14), dp(11), dp(14), dp(11));
-        urlInput.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
+        urlInput.setHint("Wklej adres, np. onet.pl/artykul…");
+        styleInput(urlInput);
         urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(0, dp(46), 1f);
-        inputLp.setMargins(0, 0, dp(8), 0);
-        row.addView(urlInput, inputLp);
+        urlInput.setImeOptions(EditorInfo.IME_ACTION_GO);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        r.addView(urlInput, ilp);
 
-        Button readBtn = primaryBtn("Czytaj");
-        row.addView(readBtn, actionBtnLp());
-        card.addView(row);
+        Button paste = secondaryBtn("Wklej");
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-2, dp(48));
+        plp.setMargins(dp(8), 0, 0, 0);
+        r.addView(paste, plp);
+
+        Button go = primaryBtn("Czytaj");
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(-2, dp(48));
+        glp.setMargins(dp(8), 0, 0, 0);
+        r.addView(go, glp);
+        card.addView(r);
 
         loadingBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         loadingBar.setMax(100);
         loadingBar.setVisibility(View.GONE);
-        LinearLayout.LayoutParams lbp = new LinearLayout.LayoutParams(-1, dp(2));
-        lbp.setMargins(0, dp(8), 0, 0);
-        card.addView(loadingBar, lbp);
+        LinearLayout.LayoutParams lb = new LinearLayout.LayoutParams(-1, dp(3));
+        lb.setMargins(0, dp(10), 0, 0);
+        card.addView(loadingBar, lb);
 
-        readBtn.setOnClickListener(v -> extractAndRead());
-        urlInput.setOnEditorActionListener((v, actionId, event) -> { extractAndRead(); return true; });
-
+        paste.setOnClickListener(v -> {
+            String clip = clipboardText();
+            if (clip.isEmpty()) { toast("Schowek jest pusty"); return; }
+            if (looksLikeUrl(clip)) { urlInput.setText(clip); extractAndRead(); }
+            else { reader.play(clip, "", 0); }
+        });
+        go.setOnClickListener(v -> extractAndRead());
+        urlInput.setOnEditorActionListener((v, id, e) -> { extractAndRead(); return true; });
         return card;
     }
 
-    // ── Karta tekstu ─────────────────────────────────────────────────────────
+    private View buildTextCard() {
+        LinearLayout card = card();
 
-    private LinearLayout buildTextCard() {
-        LinearLayout card = surfaceCard();
-
-        LinearLayout topRow = new LinearLayout(this);
-        topRow.setOrientation(LinearLayout.HORIZONTAL);
-        topRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams trp = new LinearLayout.LayoutParams(-1, -2);
-        trp.setMargins(0, 0, 0, dp(8));
-
-        topRow.addView(sectionLabel("TEKST"), new LinearLayout.LayoutParams(0, -2, 1f));
-
-        Button clearBtn = ghostBtn("Wyczyść");
-        topRow.addView(clearBtn);
-        card.addView(topRow, trp);
+        LinearLayout top = row();
+        LinearLayout lc = new LinearLayout(this);
+        lc.setOrientation(LinearLayout.VERTICAL);
+        lc.addView(label("TEKST"));
+        textMeta = new TextView(this);
+        textMeta.setTextColor(C_MUTED);
+        textMeta.setTextSize(11);
+        lc.addView(textMeta);
+        top.addView(lc, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button pasteTxt = ghostBtn("Wklej");
+        Button clear = ghostBtn("Wyczyść");
+        top.addView(pasteTxt);
+        top.addView(clear);
+        card.addView(top, mb(8));
 
         textInput = new EditText(this);
-        textInput.setGravity(Gravity.TOP);
-        textInput.setMinLines(3);
-        textInput.setHint("Tekst pojawi się po kliknięciu Czytaj\nlub wklej własny…");
-        textInput.setTextColor(C_TEXT);
-        textInput.setHintTextColor(C_MUTED);
-        textInput.setTextSize(14);
-        textInput.setLineSpacing(dp(3), 1f);
-        textInput.setPadding(dp(14), dp(11), dp(14), dp(11));
-        textInput.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
-        card.addView(textInput, new LinearLayout.LayoutParams(-1, dp(148)));
+        textInput.setGravity(Gravity.TOP | Gravity.START);
+        textInput.setHint("Tu pojawi się artykuł. Możesz też wkleić dowolny tekst.\n\nStuknij w zdanie i wybierz „Od kursora”, żeby zacząć od niego.");
+        styleInput(textInput);
+        textInput.setTextSize(15);
+        textInput.setLineSpacing(dp(4), 1f);
+        textInput.setVerticalScrollBarEnabled(true);
+        textInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        textInput.setHorizontallyScrolling(false);
+        textInput.setMaxLines(Integer.MAX_VALUE);
+        // Przewijanie wewnątrz pola zamiast całego ekranu
+        textInput.setOnTouchListener((v, ev) -> {
+            v.getParent().requestDisallowInterceptTouchEvent(true);
+            if ((ev.getActionMasked()) == android.view.MotionEvent.ACTION_UP) {
+                v.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
+        card.addView(textInput, new LinearLayout.LayoutParams(-1, dp(260)));
 
-        LinearLayout btns = new LinearLayout(this);
-        btns.setOrientation(LinearLayout.HORIZONTAL);
-        btns.setGravity(Gravity.END);
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(-1, -2);
-        blp.setMargins(0, dp(8), 0, 0);
+        LinearLayout btns = row();
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        Button fromCursor = secondaryBtn("Od kursora");
+        Button fromStart = primaryBtn("Czytaj od początku");
+        btns.addView(fromCursor, blp);
+        LinearLayout.LayoutParams blp2 = new LinearLayout.LayoutParams(0, dp(46), 1.4f);
+        blp2.setMargins(dp(8), 0, 0, 0);
+        btns.addView(fromStart, blp2);
+        LinearLayout.LayoutParams bwrap = mb(0);
+        bwrap.setMargins(0, dp(10), 0, 0);
+        card.addView(btns, bwrap);
 
-        Button cursorBtn  = secondaryBtn("Od kursora");
-        Button readTxtBtn = primaryBtn("Czytaj tekst");
-        btns.addView(cursorBtn,  actionBtnLp());
-        btns.addView(readTxtBtn, actionBtnLp());
-        card.addView(btns, blp);
-
-        clearBtn.setOnClickListener(v -> { textInput.setText(""); stopReading(); });
-        readTxtBtn.setOnClickListener(v -> speak(textInput.getText().toString()));
-        cursorBtn.setOnClickListener(v -> speakFromCursor());
-
+        pasteTxt.setOnClickListener(v -> {
+            String clip = clipboardText();
+            if (clip.isEmpty()) { toast("Schowek jest pusty"); return; }
+            textInput.setText(clip);
+        });
+        clear.setOnClickListener(v -> { reader.clear(); textInput.setText(""); shownText = null; });
+        fromStart.setOnClickListener(v -> { hideKeyboard(); readEditor(0); });
+        fromCursor.setOnClickListener(v -> {
+            hideKeyboard();
+            int pos = Math.max(0, textInput.getSelectionStart());
+            readEditor(pos);
+        });
         return card;
     }
 
-    // ── Player — hero card ───────────────────────────────────────────────────
+    private View buildVoiceCard() {
+        LinearLayout card = card();
+        card.addView(label("JĘZYK I GŁOS"), mb(8));
 
-    private LinearLayout buildPlayer() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(18), dp(18), dp(16));
-        card.setBackground(mkRound(C_PRIMARY_DIM, isDarkMode() ? C_BORDER : 0, 22));
+        LinearLayout seg = new LinearLayout(this);
+        seg.setOrientation(LinearLayout.HORIZONTAL);
+        seg.setPadding(dp(3), dp(3), dp(3), dp(3));
+        seg.setBackground(round(C_SURFACE2, 0, 12));
+        String[][] modes = {{"auto", "Automatycznie"}, {"pl", "Polski"}, {"en", "English"}};
+        for (String[] m : modes) {
+            Button b = new Button(this);
+            b.setText(m[1]);
+            b.setAllCaps(false);
+            b.setTextSize(13);
+            b.setTag(m[0]);
+            b.setStateListAnimator(null);
+            b.setOnClickListener(v -> reader.setLangMode((String) v.getTag()));
+            seg.addView(b, new LinearLayout.LayoutParams(0, dp(38), 1f));
+            langButtons.add(b);
+        }
+        card.addView(seg, mb(12));
 
-        // Now-playing title
-        nowPlayingTitle = new TextView(this);
-        nowPlayingTitle.setText("Gotowy do czytania");
-        nowPlayingTitle.setTextColor(C_PRIMARY);
-        nowPlayingTitle.setTextSize(13);
-        nowPlayingTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        nowPlayingTitle.setSingleLine(true);
-        nowPlayingTitle.setEllipsize(TextUtils.TruncateAt.END);
-        card.addView(nowPlayingTitle);
+        voicePlLabel = new TextView(this);
+        voiceEnLabel = new TextView(this);
+        card.addView(voiceRow("Polski", voicePlLabel, "pl"), mb(8));
+        card.addView(voiceRow("English", voiceEnLabel, "en"));
 
-        // Fragment preview (italic, muted)
-        nowPlayingPreview = new TextView(this);
-        nowPlayingPreview.setText("");
-        nowPlayingPreview.setTextColor(C_MUTED);
-        nowPlayingPreview.setTextSize(12);
-        nowPlayingPreview.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.ITALIC));
-        nowPlayingPreview.setMaxLines(2);
-        nowPlayingPreview.setEllipsize(TextUtils.TruncateAt.END);
-        nowPlayingPreview.setLineSpacing(dp(2), 1f);
-        LinearLayout.LayoutParams pvlp = new LinearLayout.LayoutParams(-1, -2);
-        pvlp.setMargins(0, dp(3), 0, dp(14));
-        card.addView(nowPlayingPreview, pvlp);
+        voiceTip = new TextView(this);
+        voiceTip.setText("✨ Robotyczny głos? Stuknij „Zmień” i pobierz naturalny głos neuronowy — działa offline.");
+        voiceTip.setTextColor(C_PRIMARY);
+        voiceTip.setTextSize(12);
+        voiceTip.setLineSpacing(dp(2), 1f);
+        voiceTip.setPadding(dp(12), dp(10), dp(12), dp(10));
+        voiceTip.setBackground(round(C_PRIMARY_DIM, 0, 12));
+        voiceTip.setOnClickListener(v -> showVoiceDialog("pl"));
+        LinearLayout.LayoutParams tlp = mb(0);
+        tlp.setMargins(0, dp(12), 0, 0);
+        card.addView(voiceTip, tlp);
+        return card;
+    }
 
-        // Pasek postępu + licznik
-        LinearLayout progRow = new LinearLayout(this);
-        progRow.setOrientation(LinearLayout.HORIZONTAL);
-        progRow.setGravity(Gravity.CENTER_VERTICAL);
+    private View voiceRow(String langName, TextView valueView, String lang) {
+        LinearLayout r = row();
+        r.setPadding(dp(12), dp(10), dp(8), dp(10));
+        r.setBackground(round(C_SURFACE2, 0, 12));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView l = new TextView(this);
+        l.setText(langName);
+        l.setTextColor(C_MUTED);
+        l.setTextSize(11);
+        col.addView(l);
+        valueView.setTextColor(C_TEXT);
+        valueView.setTextSize(14);
+        valueView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        valueView.setSingleLine(true);
+        valueView.setEllipsize(TextUtils.TruncateAt.END);
+        col.addView(valueView);
+        r.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button change = ghostBtn("Zmień ›");
+        change.setTextColor(C_PRIMARY);
+        r.addView(change);
+        View.OnClickListener open = v -> showVoiceDialog(lang);
+        r.setOnClickListener(open);
+        change.setOnClickListener(open);
+        return r;
+    }
 
-        progressSeekBar = new SeekBar(this);
-        progressSeekBar.setMax(100);
-        progRow.addView(progressSeekBar, new LinearLayout.LayoutParams(0, dp(28), 1f));
+    private View buildPlayer() {
+        LinearLayout p = new LinearLayout(this);
+        p.setOrientation(LinearLayout.VERTICAL);
+        p.setPadding(dp(18), dp(14), dp(18), dp(12));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(C_SURFACE);
+        float r = dp(22);
+        bg.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        bg.setStroke(dp(1), C_BORDER);
+        p.setBackground(bg);
+        p.setElevation(dp(8));
 
+        LinearLayout titleRow = row();
+        nowTitle = new TextView(this);
+        nowTitle.setTextColor(C_TEXT);
+        nowTitle.setTextSize(14);
+        nowTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        nowTitle.setSingleLine(true);
+        nowTitle.setEllipsize(TextUtils.TruncateAt.END);
+        titleRow.addView(nowTitle, new LinearLayout.LayoutParams(0, -2, 1f));
+        voiceLoading = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
+        voiceLoading.setVisibility(View.GONE);
+        titleRow.addView(voiceLoading, new LinearLayout.LayoutParams(dp(18), dp(18)));
+        p.addView(titleRow);
+
+        nowPreview = new TextView(this);
+        nowPreview.setTextColor(C_MUTED);
+        nowPreview.setTextSize(12);
+        nowPreview.setMaxLines(2);
+        nowPreview.setEllipsize(TextUtils.TruncateAt.END);
+        nowPreview.setLineSpacing(dp(2), 1f);
+        LinearLayout.LayoutParams pvl = mb(4);
+        pvl.setMargins(0, dp(2), 0, dp(4));
+        p.addView(nowPreview, pvl);
+
+        LinearLayout prog = row();
+        progressSeek = new SeekBar(this);
+        prog.addView(progressSeek, new LinearLayout.LayoutParams(0, dp(30), 1f));
         progressText = new TextView(this);
-        progressText.setText("—");
         progressText.setTextColor(C_MUTED);
         progressText.setTextSize(11);
         progressText.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams ptlp = new LinearLayout.LayoutParams(-2, -2);
-        ptlp.setMargins(dp(10), 0, 0, 0);
-        progRow.addView(progressText, ptlp);
-        card.addView(progRow);
+        prog.addView(progressText);
+        p.addView(prog);
 
-        // Przyciski sterowania
-        LinearLayout controls = new LinearLayout(this);
-        controls.setOrientation(LinearLayout.HORIZONTAL);
-        controls.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-1, -2);
-        clp.setMargins(0, dp(14), 0, 0);
+        LinearLayout ctr = new LinearLayout(this);
+        ctr.setOrientation(LinearLayout.HORIZONTAL);
+        ctr.setGravity(Gravity.CENTER);
+        Button prev = circleBtn("⏮", false);
+        playPauseBtn = circleBtn("▶", true);
+        Button next = circleBtn("⏭", false);
+        Button stop = circleBtn("⏹", false);
+        stop.setTextColor(C_DANGER);
+        stop.setBackground(round(C_DANGER_BG, 0, 26));
+        LinearLayout.LayoutParams small = new LinearLayout.LayoutParams(dp(50), dp(50));
+        small.setMargins(dp(6), 0, dp(6), 0);
+        LinearLayout.LayoutParams big = new LinearLayout.LayoutParams(dp(68), dp(68));
+        big.setMargins(dp(10), 0, dp(10), 0);
+        ctr.addView(prev, small);
+        ctr.addView(playPauseBtn, big);
+        ctr.addView(next, small);
+        ctr.addView(stop, small);
+        LinearLayout.LayoutParams cl = mb(0);
+        cl.setMargins(0, dp(4), 0, dp(10));
+        p.addView(ctr, cl);
 
-        Button prevBtn = controlBtn("⏮");
-        playPauseButton = playPauseBtn();
-        Button nextBtn = controlBtn("⏭");
-        Button stopBtn = stopButton();
+        // Tempo: − [presety] +
+        LinearLayout rate = row();
+        Button minus = chip("−");
+        rate.addView(minus, new LinearLayout.LayoutParams(dp(36), dp(32)));
+        for (float preset : RATE_PRESETS) {
+            Button c = chip(fmtRate(preset));
+            c.setTag(preset);
+            c.setOnClickListener(v -> reader.setRate((Float) v.getTag()));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(32), 1f);
+            lp.setMargins(dp(4), 0, 0, 0);
+            rate.addView(c, lp);
+            rateChips.add(c);
+        }
+        Button plus = chip("+");
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(dp(36), dp(32));
+        plp.setMargins(dp(4), 0, 0, 0);
+        rate.addView(plus, plp);
+        p.addView(rate);
 
-        LinearLayout.LayoutParams ctrlLp = new LinearLayout.LayoutParams(dp(50), dp(50));
-        ctrlLp.gravity = Gravity.CENTER_VERTICAL;
-        ctrlLp.setMargins(dp(4), 0, dp(4), 0);
+        rateValue = new TextView(this);
+        rateValue.setTextColor(C_MUTED);
+        rateValue.setTextSize(11);
+        rateValue.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams rv = mb(0);
+        rv.setMargins(0, dp(4), 0, 0);
+        p.addView(rateValue, rv);
 
-        LinearLayout.LayoutParams playLp = new LinearLayout.LayoutParams(dp(76), dp(76));
-        playLp.gravity = Gravity.CENTER_VERTICAL;
-        playLp.setMargins(dp(10), 0, dp(10), 0);
+        prev.setOnClickListener(v -> reader.prev());
+        next.setOnClickListener(v -> reader.next());
+        stop.setOnClickListener(v -> reader.stop());
+        playPauseBtn.setOnClickListener(v -> onPlayPressed());
+        minus.setOnClickListener(v -> reader.setRate(Math.round((reader.getRate() - 0.05f) * 100) / 100f));
+        plus.setOnClickListener(v -> reader.setRate(Math.round((reader.getRate() + 0.05f) * 100) / 100f));
 
-        controls.addView(prevBtn,         ctrlLp);
-        controls.addView(playPauseButton, playLp);
-        controls.addView(nextBtn,         ctrlLp);
-        controls.addView(stopBtn,         ctrlLp);
-        card.addView(controls, clp);
-
-        // Tempo
-        LinearLayout rateRow = new LinearLayout(this);
-        rateRow.setOrientation(LinearLayout.HORIZONTAL);
-        rateRow.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-1, -2);
-        rlp.setMargins(0, dp(14), 0, 0);
-
-        TextView rateLabel = new TextView(this);
-        rateLabel.setText("Tempo");
-        rateLabel.setTextColor(C_MUTED);
-        rateLabel.setTextSize(11);
-        rateLabel.setPadding(0, 0, dp(10), 0);
-        rateRow.addView(rateLabel);
-
-        rateSeekBar = new SeekBar(this);
-        rateSeekBar.setMax(120);
-        rateSeekBar.setProgress(32);
-        rateRow.addView(rateSeekBar, new LinearLayout.LayoutParams(0, -2, 1f));
-
-        rateText = new TextView(this);
-        rateText.setText(String.format(Locale.US, "%.2fx", DEF_RATE));
-        rateText.setTextColor(C_MUTED);
-        rateText.setTextSize(11);
-        rateText.setTypeface(Typeface.DEFAULT_BOLD);
-        LinearLayout.LayoutParams rtlp = new LinearLayout.LayoutParams(-2, -2);
-        rtlp.setMargins(dp(10), 0, 0, 0);
-        rateRow.addView(rateText, rtlp);
-        card.addView(rateRow, rlp);
-
-        // Zdarzenia
-        prevBtn.setOnClickListener(v -> goToPrevChunk());
-        playPauseButton.setOnClickListener(v -> handlePlayPause());
-        nextBtn.setOnClickListener(v -> goToNextChunk());
-        stopBtn.setOnClickListener(v -> stopReading());
-
-        progressSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {}
-            @Override public void onStartTrackingTouch(SeekBar sb) {}
-            @Override
-            public void onStopTrackingTouch(SeekBar sb) {
-                if (!currentChunks.isEmpty()) {
-                    int target = (int)(sb.getProgress() / 100f * (currentChunks.size() - 1));
-                    jumpToChunk(Math.max(0, Math.min(target, currentChunks.size() - 1)));
+        progressSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int v, boolean fromUser) {
+                if (fromUser && reader.getChunkCount() > 0) {
+                    progressText.setText((v + 1) + " / " + reader.getChunkCount());
                 }
             }
-        });
-
-        rateSeekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
-                speechRate = 0.6f + (progress / 100f);
-                rateText.setText(String.format(Locale.US, "%.2fx", speechRate));
-                applySpeechRate();
+            @Override public void onStartTrackingTouch(SeekBar sb) { userSeeking = true; }
+            @Override public void onStopTrackingTouch(SeekBar sb) {
+                userSeeking = false;
+                reader.seek(sb.getProgress());
             }
-            @Override public void onStartTrackingTouch(SeekBar sb) {}
-            @Override public void onStopTrackingTouch(SeekBar sb) { restartCurrentChunkWithNewRate(); }
         });
-
-        return card;
+        return p;
     }
 
-    // ── Sekcja ustawień (zwijana) ─────────────────────────────────────────
+    // ════════════════════════════════════════════════════════════════════
+    //  Odświeżanie stanu
+    // ════════════════════════════════════════════════════════════════════
 
-    private Button buildSettingsToggle() {
-        Button toggle = new Button(this);
-        toggle.setText("Głos i język  ▾");
-        toggle.setAllCaps(false);
-        toggle.setTextSize(12);
-        toggle.setTypeface(Typeface.DEFAULT_BOLD);
-        toggle.setTextColor(C_MUTED);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            toggle.setLetterSpacing(0.04f);
+    @Override
+    public void onReaderState() {
+        if (statusText == null) return;
+        statusText.setText(reader.getStatus());
+
+        // Tekst z Readera → pole (tylko gdy się zmienił)
+        String t = reader.getText();
+        if (t != shownText) {
+            shownText = t;
+            highlight = null;
+            highlightedIndex = -2;
+            textInput.setText(t);
         }
-        toggle.setBackground(null);
-        toggle.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        toggle.setPadding(dp(2), dp(8), dp(4), dp(8));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 0, 0, dp(4));
-        toggle.setLayoutParams(lp);
-        toggle.setOnClickListener(v -> {
-            settingsVisible = !settingsVisible;
-            settingsPanel.setVisibility(settingsVisible ? View.VISIBLE : View.GONE);
-            toggle.setText(settingsVisible ? "Głos i język  ▴" : "Głos i język  ▾");
-        });
-        return toggle;
+        int count = reader.getChunkCount();
+        textMeta.setText(t.isEmpty() ? "" : String.format(Locale.US, "%,d znaków · %s",
+            t.length(), formatDuration(Math.round(t.length() / (15f * reader.getRate())))).replace(',', ' '));
+
+        // Odtwarzacz
+        boolean has = count > 0;
+        nowTitle.setText(has ? reader.displayTitle() : "Nic nie jest czytane");
+        nowPreview.setText(has ? reader.currentChunkPreview() : "Wklej adres strony albo tekst powyżej.");
+        progressSeek.setEnabled(has);
+        progressSeek.setMax(Math.max(0, count - 1));
+        if (!userSeeking) {
+            progressSeek.setProgress(Math.min(reader.getIndex(), Math.max(0, count - 1)));
+            progressText.setText(has ? (reader.getIndex() + 1) + " / " + count
+                + "  ·  " + formatDuration(reader.remainingSeconds()) : "—");
+        }
+        playPauseBtn.setText(reader.isPlaying() ? "⏸" : "▶");
+        voiceLoading.setVisibility(reader.isLoading() ? View.VISIBLE : View.GONE);
+
+        float rate = reader.getRate();
+        rateValue.setText("Tempo " + String.format(Locale.US, "%.2fx", rate));
+        for (Button c : rateChips) {
+            boolean sel = Math.abs((Float) c.getTag() - rate) < 0.01f;
+            c.setTextColor(sel ? C_ON_PRIMARY : C_PRIMARY);
+            c.setBackground(round(sel ? C_PRIMARY : C_PRIMARY_DIM, 0, 10));
+        }
+
+        String mode = reader.getLangMode();
+        for (Button b : langButtons) {
+            boolean sel = mode.equals(b.getTag());
+            b.setTextColor(sel ? C_TEXT : C_MUTED);
+            b.setTypeface(Typeface.create(sel ? "sans-serif-medium" : "sans-serif", Typeface.NORMAL));
+            b.setBackground(sel ? round(C_SURFACE, C_BORDER, 10) : null);
+        }
+
+        voicePlLabel.setText(reader.voiceLabel("pl"));
+        voiceEnLabel.setText(reader.voiceLabel("en"));
+        boolean anyNeural = reader.getVoice("pl").startsWith(Reader.VOICE_NEURAL_PREFIX)
+            || reader.getVoice("en").startsWith(Reader.VOICE_NEURAL_PREFIX);
+        voiceTip.setVisibility(anyNeural ? View.GONE : View.VISIBLE);
+
+        applyHighlight();
+        if (voiceDialog != null && voiceDialog.isShowing()) renderVoiceList(false);
     }
 
-    private LinearLayout buildSettingsPanel() {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(16), dp(14), dp(16), dp(16));
-        panel.setBackground(mkRound(C_SURFACE, C_BORDER, 20));
+    private void applyHighlight() {
+        int i = reader.isActive() ? reader.getIndex() : -1;
+        if (i == highlightedIndex) return;
+        Editable e = textInput.getText();
+        if (highlight != null) e.removeSpan(highlight);
+        highlight = null;
+        highlightedIndex = i;
+        if (i < 0 || shownText == null || !shownText.contentEquals(e)) return;
+        int a = reader.chunkStart(i), b = reader.chunkEnd(i);
+        if (a < 0 || b > e.length() || b <= a) return;
+        highlight = new BackgroundColorSpan(C_HIGHLIGHT);
+        e.setSpan(highlight, a, b, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+        textInput.post(() -> {
+            if (textInput.getLayout() == null) return;
+            int line = textInput.getLayout().getLineForOffset(a);
+            int y = textInput.getLayout().getLineTop(line) - dp(40);
+            textInput.scrollTo(0, Math.max(0, y));
+        });
+    }
 
-        LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(-1, dp(50));
-        LinearLayout.LayoutParams spacedLp  = new LinearLayout.LayoutParams(-1, -2);
-        spacedLp.setMargins(0, dp(12), 0, 0);
+    // ════════════════════════════════════════════════════════════════════
+    //  Akcje
+    // ════════════════════════════════════════════════════════════════════
 
-        panel.addView(sectionLabel("JĘZYK"));
-        languageSpinner = styledSpinner(new String[]{"Automatycznie", "Polski", "English"});
-        panel.addView(languageSpinner, spinnerLp);
+    private void onPlayPressed() {
+        hideKeyboard();
+        String editor = textInput.getText().toString();
+        boolean same = shownText != null && shownText.contentEquals(editor);
+        if (same && reader.hasContent()) { reader.togglePlayPause(); return; }
+        if (editor.trim().isEmpty()) { toast("Wklej adres strony albo tekst"); return; }
+        reader.play(editor, "", 0);
+    }
 
-        panel.addView(sectionLabel("GŁOS"), spacedLp);
-        voiceSpinner = styledSpinner(new String[]{});
-        panel.addView(voiceSpinner, spinnerLp);
+    private void readEditor(int offset) {
+        String editor = textInput.getText().toString();
+        if (editor.trim().isEmpty()) { toast("Brak tekstu do czytania"); return; }
+        boolean same = shownText != null && shownText.contentEquals(editor);
+        if (same && reader.hasContent()) {
+            if (reader.isActive()) reader.seekToOffset(offset);
+            else { reader.seekToOffset(offset); reader.togglePlayPause(); }
+        } else {
+            reader.play(editor, "", offset);
+        }
+    }
 
-        languageSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                String newCode = pos == 1 ? "pl" : pos == 2 ? "en" : "auto";
-                if (newCode.equals(selectedLanguageCode)) return;
-                selectedLanguageCode = newCode;
-                selectedVoiceName = "";
-                if (!allVoices.isEmpty()) refreshVoiceSpinner();
+    private void handleIncomingIntent(Intent intent) {
+        if (intent == null) return;
+        String action = intent.getAction();
+        CharSequence shared = null;
+        if (Intent.ACTION_SEND.equals(action)) shared = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
+        else if (Intent.ACTION_PROCESS_TEXT.equals(action)) shared = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT);
+        if (shared == null) return;
+        String value = shared.toString().trim();
+        intent.setAction(null); // nie czytaj ponownie po obróceniu ekranu
+        String url = extractUrl(value);
+        if (url != null && value.length() < 600) {
+            urlInput.setText(url);
+            extractAndRead();
+        } else {
+            String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+            reader.play(value, subject != null ? subject : "", 0);
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Okno wyboru głosu
+    // ════════════════════════════════════════════════════════════════════
+
+    private void showVoiceDialog(String lang) {
+        voiceDialogLang = lang;
+        ScrollView sv = new ScrollView(this);
+        voiceList = new LinearLayout(this);
+        voiceList.setOrientation(LinearLayout.VERTICAL);
+        voiceList.setPadding(dp(18), dp(4), dp(18), dp(12));
+        sv.addView(voiceList);
+        renderVoiceList(true);
+
+        int theme = isDarkMode() ? android.R.style.Theme_Material_Dialog_Alert
+            : android.R.style.Theme_Material_Light_Dialog_Alert;
+        voiceDialog = new AlertDialog.Builder(this, theme)
+            .setTitle("pl".equals(lang) ? "Głos — polski" : "Głos — angielski")
+            .setView(sv)
+            .setPositiveButton("Gotowe", null)
+            .create();
+        voiceDialog.setOnDismissListener(d -> { if (reader.isPreviewing()) reader.stop(); voiceList = null; });
+        voiceDialog.show();
+        if (voiceDialog.getWindow() != null) {
+            voiceDialog.getWindow().setBackgroundDrawable(round(C_SURFACE, 0, 24));
+        }
+    }
+
+    private void renderVoiceList(boolean force) {
+        if (voiceList == null) return;
+        long now = System.currentTimeMillis();
+        if (!force && now - lastListRender < 200) return;
+        lastListRender = now;
+        String lang = voiceDialogLang;
+        String selected = reader.getVoice(lang);
+        voiceList.removeAllViews();
+
+        // ── Naturalne ──
+        voiceList.addView(label("NATURALNE · NEURONOWE (OFFLINE)"), mbTop(10, 4));
+        TextView info = new TextView(this);
+        info.setText("Głosy Piper działające na telefonie bez internetu. Pobierasz raz (~65 MB).");
+        info.setTextColor(C_MUTED);
+        info.setTextSize(12);
+        voiceList.addView(info, mb(8));
+
+        for (VoiceCatalog.Model m : VoiceCatalog.forLang(this, lang)) {
+            voiceList.addView(neuralRow(m, lang, selected), mb(6));
+        }
+
+        Button importBtn = secondaryBtn("＋ Importuj własny głos Piper (.onnx + .json)");
+        importBtn.setTextSize(12);
+        importBtn.setOnClickListener(v -> startImport());
+        voiceList.addView(importBtn, mbTop(4, 4));
+
+        // ── Systemowe ──
+        voiceList.addView(label("SYSTEMOWE"), mbTop(16, 6));
+        voiceList.addView(systemRow(Reader.VOICE_SYSTEM_AUTO, "Automatycznie",
+            "najlepszy zainstalowany głos", lang, selected), mb(6));
+        for (Voice v : reader.systemEngine.voicesFor(lang)) {
+            String spec = Reader.VOICE_SYSTEM_PREFIX + v.getName();
+            String q = v.getQuality() >= Voice.QUALITY_VERY_HIGH ? "bardzo wysoka jakość"
+                : v.getQuality() >= Voice.QUALITY_HIGH ? "wysoka jakość" : "standard";
+            String net = v.isNetworkConnectionRequired() ? " · wymaga internetu" : " · offline";
+            voiceList.addView(systemRow(spec, Reader.prettyVoiceName(v.getName()),
+                v.getLocale().toLanguageTag() + " · " + q + net, lang, selected), mb(6));
+        }
+        Button sys = ghostBtn("Pobierz więcej głosów systemowych ›");
+        sys.setTextColor(C_PRIMARY);
+        sys.setOnClickListener(v -> {
+            try { startActivity(new Intent("com.android.settings.TTS_SETTINGS")); }
+            catch (Exception e) { toast("Otwórz Ustawienia → Zamiana tekstu na mowę"); }
+        });
+        voiceList.addView(sys, mbTop(4, 0));
+    }
+
+    private View neuralRow(VoiceCatalog.Model m, String lang, String selected) {
+        String spec = Reader.VOICE_NEURAL_PREFIX + m.id;
+        boolean installed = VoiceCatalog.isInstalled(this, m.id);
+        boolean isSel = spec.equals(selected);
+        boolean downloading = VoiceCatalog.isDownloading(m.id);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(10), dp(8), dp(10));
+        box.setBackground(round(isSel ? C_PRIMARY_DIM : C_SURFACE2, isSel ? C_PRIMARY : 0, 12));
+
+        LinearLayout r = row();
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView name = new TextView(this);
+        name.setText((isSel ? "✓ " : "") + m.name);
+        name.setTextColor(isSel ? C_PRIMARY : C_TEXT);
+        name.setTextSize(15);
+        name.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        col.addView(name);
+        TextView desc = new TextView(this);
+        String size = installed
+            ? String.format(Locale.US, "pobrany · %d MB", VoiceCatalog.sizeOnDisk(this, m.id) / (1024 * 1024))
+            : (m.approxMb > 0 ? "~" + m.approxMb + " MB" : "");
+        desc.setText(m.desc + (size.isEmpty() ? "" : " · " + size));
+        desc.setTextColor(C_MUTED);
+        desc.setTextSize(12);
+        col.addView(desc);
+        r.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+
+        if (installed) {
+            Button play = chip("▶");
+            play.setOnClickListener(v -> reader.preview(spec, lang));
+            r.addView(play, new LinearLayout.LayoutParams(dp(40), dp(34)));
+            if (!isSel) {
+                Button use = pill("Wybierz", true);
+                use.setOnClickListener(v -> { reader.setVoice(lang, spec); renderVoiceList(true); });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(34));
+                lp.setMargins(dp(6), 0, 0, 0);
+                r.addView(use, lp);
             }
-            @Override public void onNothingSelected(AdapterView<?> p) { selectedLanguageCode = "auto"; }
-        });
-
-        return panel;
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Fabryki widgetów
-    // ════════════════════════════════════════════════════════════════════════
-
-    private Button primaryBtn(String text) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setAllCaps(false);
-        btn.setTextSize(13);
-        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        btn.setTextColor(C_ON_PRIMARY);
-        btn.setBackground(mkRound(C_PRIMARY, 0, 12));
-        btn.setPadding(dp(14), 0, dp(14), 0);
-        return btn;
-    }
-
-    private Button secondaryBtn(String text) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setAllCaps(false);
-        btn.setTextSize(13);
-        btn.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        btn.setTextColor(C_TEXT);
-        btn.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
-        btn.setPadding(dp(14), 0, dp(14), 0);
-        return btn;
-    }
-
-    private Button ghostBtn(String text) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setAllCaps(false);
-        btn.setTextSize(12);
-        btn.setTextColor(C_MUTED);
-        btn.setBackground(null);
-        btn.setMinHeight(0);
-        btn.setMinimumHeight(0);
-        btn.setPadding(dp(8), 0, 0, 0);
-        return btn;
-    }
-
-    private LinearLayout.LayoutParams actionBtnLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(46));
-        lp.setMargins(dp(8), 0, 0, 0);
-        return lp;
-    }
-
-    private Button controlBtn(String text) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setTextSize(20);
-        btn.setAllCaps(false);
-        btn.setTextColor(C_PRIMARY);
-        btn.setBackground(mkRound(isDarkMode() ? C_SURFACE : C_BG, isDarkMode() ? C_BORDER : 0, 25));
-        btn.setPadding(0, 0, 0, 0);
-        return btn;
-    }
-
-    private Button playPauseBtn() {
-        Button btn = new Button(this);
-        btn.setText("▶");
-        btn.setTextSize(30);
-        btn.setAllCaps(false);
-        btn.setTextColor(C_ON_PRIMARY);
-        btn.setBackground(mkRound(C_PRIMARY, 0, 38));
-        btn.setPadding(0, 0, 0, 0);
-        return btn;
-    }
-
-    private Button stopButton() {
-        Button btn = new Button(this);
-        btn.setText("⏹");
-        btn.setTextSize(18);
-        btn.setAllCaps(false);
-        btn.setTextColor(C_DANGER);
-        btn.setBackground(mkRound(C_DANGER_BG, 0, 25));
-        btn.setPadding(0, 0, 0, 0);
-        return btn;
-    }
-
-    private Spinner styledSpinner(String[] items) {
-        Spinner spinner = new Spinner(this);
-        spinner.setBackground(mkRound(C_SURFACE2, C_BORDER, 12));
-        spinner.setPadding(dp(12), 0, dp(12), 0);
-        if (items.length > 0) {
-            ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item, items);
-            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-            spinner.setAdapter(adapter);
+            box.setOnLongClickListener(v -> { confirmDelete(m, lang); return true; });
+        } else if (downloading) {
+            Button cancel = pill("Anuluj", false);
+            cancel.setOnClickListener(v -> VoiceCatalog.cancel(m.id));
+            r.addView(cancel, new LinearLayout.LayoutParams(-2, dp(34)));
+        } else {
+            Button dl = pill("Pobierz", true);
+            dl.setOnClickListener(v -> { VoiceCatalog.download(this, m); renderVoiceList(true); });
+            r.addView(dl, new LinearLayout.LayoutParams(-2, dp(34)));
         }
-        return spinner;
+        box.addView(r);
+
+        if (downloading) {
+            long[] p = VoiceCatalog.progressOf(m.id);
+            ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+            bar.setMax(1000);
+            if (p != null && p[1] > 0) bar.setProgress((int) Math.min(1000, p[0] * 1000 / p[1]));
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, dp(6));
+            bl.setMargins(0, dp(8), dp(4), 0);
+            box.addView(bar, bl);
+            TextView pt = new TextView(this);
+            pt.setTextColor(C_MUTED);
+            pt.setTextSize(11);
+            pt.setText(p != null ? String.format(Locale.US, "Pobieranie… %.0f / %.0f MB",
+                p[0] / 1048576.0, p[1] / 1048576.0) : "Łączenie…");
+            box.addView(pt);
+        }
+        return box;
     }
 
-    private TextView sectionLabel(String text) {
+    private View systemRow(String spec, String title, String sub, String lang, String selected) {
+        boolean isSel = spec.equals(selected);
+        LinearLayout r = row();
+        r.setPadding(dp(12), dp(10), dp(8), dp(10));
+        r.setBackground(round(isSel ? C_PRIMARY_DIM : C_SURFACE2, isSel ? C_PRIMARY : 0, 12));
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        TextView t = new TextView(this);
+        t.setText((isSel ? "✓ " : "") + title);
+        t.setTextColor(isSel ? C_PRIMARY : C_TEXT);
+        t.setTextSize(14);
+        col.addView(t);
+        TextView s = new TextView(this);
+        s.setText(sub);
+        s.setTextColor(C_MUTED);
+        s.setTextSize(11);
+        col.addView(s);
+        r.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+        Button play = chip("▶");
+        play.setOnClickListener(v -> reader.preview(spec, lang));
+        r.addView(play, new LinearLayout.LayoutParams(dp(40), dp(34)));
+        r.setOnClickListener(v -> { reader.setVoice(lang, spec); renderVoiceList(true); });
+        return r;
+    }
+
+    private void confirmDelete(VoiceCatalog.Model m, String lang) {
+        new AlertDialog.Builder(this)
+            .setTitle("Usunąć głos " + m.name + "?")
+            .setMessage("Zwolni miejsce na telefonie. Możesz go pobrać ponownie.")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Usuń", (d, w) -> {
+                if (reader.getVoice(lang).equals(Reader.VOICE_NEURAL_PREFIX + m.id)) {
+                    reader.stop();
+                    reader.setVoice(lang, Reader.VOICE_SYSTEM_AUTO);
+                }
+                VoiceCatalog.delete(this, m.id);
+                renderVoiceList(true);
+                onReaderState();
+            })
+            .show();
+    }
+
+    @Override
+    public void onProgress(String id, long done, long total) { renderVoiceList(false); }
+
+    @Override
+    public void onDone(String id, String error) {
+        VoiceCatalog.Model m = VoiceCatalog.find(this, id);
+        if (error != null) {
+            if (!"Anulowano".equals(error)) toast("Nie udało się pobrać głosu: " + error);
+        } else if (m != null) {
+            toast("Pobrano głos " + m.name);
+            // Pierwszy pobrany naturalny głos — ustaw go od razu
+            if (!reader.getVoice(m.lang).startsWith(Reader.VOICE_NEURAL_PREFIX)) {
+                reader.setVoice(m.lang, Reader.VOICE_NEURAL_PREFIX + m.id);
+            }
+        }
+        renderVoiceList(true);
+        onReaderState();
+    }
+
+    // ── Import własnego głosu ───────────────────────────────────────────
+
+    private void startImport() {
+        if (!VoiceCatalog.hasAnyEspeakData(this)) {
+            new AlertDialog.Builder(this)
+                .setTitle("Najpierw pobierz jeden głos")
+                .setMessage("Własny głos Piper potrzebuje plików wymowy (espeak-ng), które są w każdym głosie z listy. Pobierz dowolny głos, a potem zaimportuj swój.")
+                .setPositiveButton("OK", null)
+                .show();
+            return;
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Import własnego głosu")
+            .setMessage("Wybierz DWA pliki naraz: model .onnx oraz jego plik .onnx.json (taki jak z treningu Piper albo z huggingface.co/rhasspy/piper-voices).")
+            .setNegativeButton("Anuluj", null)
+            .setPositiveButton("Wybierz pliki", (d, w) -> {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                i.addCategory(Intent.CATEGORY_OPENABLE);
+                i.setType("*/*");
+                i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                try { startActivityForResult(i, REQ_IMPORT); }
+                catch (Exception e) { toast("Brak menedżera plików"); }
+            })
+            .show();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_IMPORT || resultCode != RESULT_OK || data == null) return;
+        List<Uri> uris = new ArrayList<>();
+        if (data.getClipData() != null) {
+            ClipData cd = data.getClipData();
+            for (int i = 0; i < cd.getItemCount(); i++) uris.add(cd.getItemAt(i).getUri());
+        } else if (data.getData() != null) {
+            uris.add(data.getData());
+        }
+        Uri onnx = null, json = null;
+        for (Uri u : uris) {
+            String n = VoiceCatalog.displayName(this, u).toLowerCase(Locale.ROOT);
+            if (n.endsWith(".json")) json = u;
+            else if (n.endsWith(".onnx")) onnx = u;
+        }
+        if (onnx == null || json == null) {
+            toast("Zaznacz oba pliki: .onnx i .onnx.json");
+            return;
+        }
+        toast("Importuję głos…");
+        VoiceCatalog.importCustom(this, onnx, json, (id, err) -> {
+            if (err != null) { toast("Import nieudany: " + err); return; }
+            VoiceCatalog.Model m = VoiceCatalog.find(this, id);
+            if (m != null) {
+                reader.setVoice(m.lang, Reader.VOICE_NEURAL_PREFIX + m.id);
+                toast("Dodano głos " + m.name);
+                if (voiceDialog != null && voiceDialog.isShowing() && !m.lang.equals(voiceDialogLang)) {
+                    voiceDialogLang = m.lang;
+                }
+            }
+            renderVoiceList(true);
+            onReaderState();
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  WebView i wyciąganie artykułu
+    // ════════════════════════════════════════════════════════════════════
+
+    private void configureWebView() {
+        WebSettings s = webView.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setLoadsImagesAutomatically(false);
+        s.setMediaPlaybackRequiresUserGesture(true);
+        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override public void onProgressChanged(WebView view, int p) {
+                loadingBar.setProgress(p);
+            }
+        });
+    }
+
+    private void extractAndRead() {
+        hideKeyboard();
+        String url = normalizeUrl(urlInput.getText().toString());
+        if (url == null) { toast("Wpisz adres strony"); return; }
+        urlInput.setText(url);
+        statusText.setText("Ładuję stronę…");
+        loadingBar.setProgress(0);
+        loadingBar.setVisibility(View.VISIBLE);
+        final boolean[] done = {false};
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String u) {
+                if (done[0]) return;
+                // daj stronie chwilę na doładowanie treści przez JS
+                main.postDelayed(() -> {
+                    if (done[0]) return;
+                    done[0] = true;
+                    runExtraction(url);
+                }, 900);
+            }
+        });
+        if (extractTimeout != null) main.removeCallbacks(extractTimeout);
+        extractTimeout = () -> {
+            if (done[0]) return;
+            done[0] = true;
+            runExtraction(url);  // spróbuj z tym, co się wczytało
+        };
+        main.postDelayed(extractTimeout, 25000);
+        webView.loadUrl(url);
+    }
+
+    private void runExtraction(String url) {
+        if (webView == null) return;
+        if (extractTimeout != null) main.removeCallbacks(extractTimeout);
+        statusText.setText("Wyciągam artykuł…");
+        String js = "(function(){"
+            + "var junk='script,style,noscript,nav,aside,footer,form,button,iframe,svg,figure figcaption,"
+            + "[aria-hidden=\"true\"],[role=\"navigation\"],[role=\"complementary\"],.ad,.ads,.advert,"
+            + ".advertisement,.share,.social,.related,.newsletter,.comments,#comments,.cookie,.paywall';"
+            + "document.querySelectorAll(junk).forEach(function(e){e.style.display='none';});"
+            + "var sel=['article','[itemprop=\"articleBody\"]','[role=\"main\"]','main','.article-body',"
+            + "'.article-content','.post-content','.entry-content','.story-body','#article-body','.body-copy'];"
+            + "var root=null;"
+            + "for(var i=0;i<sel.length&&!root;i++){var el=document.querySelector(sel[i]);"
+            + " if(el&&el.innerText.trim().length>300)root=el;}"
+            + "if(!root){var best=null,bs=0;document.querySelectorAll('div,section').forEach(function(el){"
+            + " var t=el.innerText||'';if(t.length<200)return;"
+            + " var c=(el.className+' '+el.id).toLowerCase();"
+            + " if(/comment|sidebar|nav|footer|header|\\bad\\b|banner|widget|menu|cookie|popup|modal|overlay|related/.test(c))return;"
+            + " var s=el.querySelectorAll('p').length*4+t.length/80;if(s>bs){bs=s;best=el;}});root=best||document.body;}"
+            + "var h1=document.querySelector('h1');"
+            + "var title=(h1&&h1.innerText.trim())||document.title||'';"
+            + "return JSON.stringify({title:title,text:root.innerText});"
+            + "})()";
+        webView.evaluateJavascript(js, value -> {
+            loadingBar.setVisibility(View.GONE);
+            String title = "", text = "";
+            try {
+                String json = new JSONObject("{\"v\":" + value + "}").getString("v");
+                JSONObject o = new JSONObject(json);
+                title = o.optString("title", "").trim();
+                text = o.optString("text", "");
+            } catch (Exception ignored) {}
+            text = Reader.cleanText(text);
+            if (text.length() < 40) {
+                statusText.setText("Nie znaleziono tekstu. Strona może wymagać logowania.");
+                return;
+            }
+            if (!title.isEmpty() && !text.startsWith(title)) text = title + "\n\n" + text;
+            reader.play(text, title, 0);
+        });
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Fabryki widoków
+    // ════════════════════════════════════════════════════════════════════
+
+    private LinearLayout card() {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(16), dp(14), dp(16), dp(16));
+        c.setBackground(round(C_SURFACE, C_BORDER, 20));
+        return c;
+    }
+
+    private LinearLayout row() {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        r.setGravity(Gravity.CENTER_VERTICAL);
+        return r;
+    }
+
+    private TextView label(String text) {
         TextView tv = new TextView(this);
         tv.setText(text);
         tv.setTextColor(C_MUTED);
         tv.setTextSize(10);
         tv.setTypeface(Typeface.DEFAULT_BOLD);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            tv.setLetterSpacing(0.12f);
-        }
-        tv.setPadding(0, 0, 0, dp(4));
+        tv.setLetterSpacing(0.12f);
         return tv;
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  Helpers UI
-    // ════════════════════════════════════════════════════════════════════════
-
-    private LinearLayout surfaceCard() {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(14), dp(16), dp(14));
-        card.setBackground(mkRound(C_SURFACE, C_BORDER, 20));
-        return card;
+    private void styleInput(EditText e) {
+        e.setTextColor(C_TEXT);
+        e.setHintTextColor(C_MUTED);
+        e.setTextSize(14);
+        e.setPadding(dp(14), dp(11), dp(14), dp(11));
+        e.setBackground(round(C_SURFACE2, C_BORDER, 12));
     }
 
-    private GradientDrawable mkRound(int fill, int stroke, int radiusDp) {
+    private Button baseBtn(String text, int size) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setAllCaps(false);
+        b.setTextSize(size);
+        b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        b.setStateListAnimator(null);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        return b;
+    }
+
+    private Button primaryBtn(String text) {
+        Button b = baseBtn(text, 14);
+        b.setTextColor(C_ON_PRIMARY);
+        b.setBackground(round(C_PRIMARY, 0, 12));
+        b.setPadding(dp(16), 0, dp(16), 0);
+        return b;
+    }
+
+    private Button secondaryBtn(String text) {
+        Button b = baseBtn(text, 14);
+        b.setTextColor(C_TEXT);
+        b.setBackground(round(C_SURFACE2, C_BORDER, 12));
+        b.setPadding(dp(14), 0, dp(14), 0);
+        return b;
+    }
+
+    private Button ghostBtn(String text) {
+        Button b = baseBtn(text, 13);
+        b.setTextColor(C_MUTED);
+        b.setBackground(null);
+        b.setPadding(dp(10), dp(6), dp(6), dp(6));
+        return b;
+    }
+
+    private Button pill(String text, boolean filled) {
+        Button b = baseBtn(text, 12);
+        b.setTextColor(filled ? C_ON_PRIMARY : C_PRIMARY);
+        b.setBackground(round(filled ? C_PRIMARY : C_PRIMARY_DIM, 0, 17));
+        b.setPadding(dp(14), 0, dp(14), 0);
+        return b;
+    }
+
+    private Button chip(String text) {
+        Button b = baseBtn(text, 12);
+        b.setTextColor(C_PRIMARY);
+        b.setBackground(round(C_PRIMARY_DIM, 0, 10));
+        b.setPadding(0, 0, 0, 0);
+        return b;
+    }
+
+    private Button circleBtn(String text, boolean primary) {
+        Button b = baseBtn(text, primary ? 26 : 18);
+        b.setTextColor(primary ? C_ON_PRIMARY : C_PRIMARY);
+        b.setBackground(round(primary ? C_PRIMARY : C_PRIMARY_DIM, 0, primary ? 34 : 25));
+        b.setPadding(0, 0, 0, 0);
+        return b;
+    }
+
+    private GradientDrawable round(int fill, int stroke, int radiusDp) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(fill);
         d.setCornerRadius(dp(radiusDp));
@@ -754,460 +1119,57 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return d;
     }
 
-    private LinearLayout.LayoutParams mbottom(int bottom) {
+    private LinearLayout.LayoutParams mb(int bottomDp) {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 0, 0, bottom);
+        lp.setMargins(0, 0, 0, dp(bottomDp));
         return lp;
     }
 
-    private void root_add_with_bottom(LinearLayout parent, View child, int bottom) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 0, 0, bottom);
-        parent.addView(child, lp);
+    private LinearLayout.LayoutParams mbTop(int topDp, int bottomDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(0, dp(topDp), 0, dp(bottomDp));
+        return lp;
     }
 
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
+    private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  Pomocnicze
+    // ════════════════════════════════════════════════════════════════════
+
+    private static String fmtRate(float r) {
+        String s = String.format(Locale.US, "%.2f", r);
+        s = s.replaceAll("0$", "").replaceAll("\\.$", ".0");
+        return s + "×";
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  WebView
-    // ════════════════════════════════════════════════════════════════════════
-
-    private void configureWebView() {
-        WebSettings s = webView.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        webView.setWebViewClient(new WebViewClient());
-        webView.setWebChromeClient(new android.webkit.WebChromeClient() {
-            @Override
-            public void onProgressChanged(WebView view, int newProgress) {
-                loadingBar.setProgress(newProgress);
-                loadingBar.setVisibility(newProgress >= 100 ? View.GONE : View.VISIBLE);
-            }
-        });
+    private static String formatDuration(int sec) {
+        if (sec <= 0) return "0 min";
+        if (sec < 60) return "<1 min";
+        int m = Math.round(sec / 60f);
+        if (m < 60) return m + " min";
+        return (m / 60) + " h " + (m % 60) + " min";
     }
 
-    // ════════════════════════════════════════════════════════════════════════
-    //  URL i Reader Mode
-    // ════════════════════════════════════════════════════════════════════════
-
-    private void loadUrlFromInput() {
-        String url = normalizeUrl(urlInput.getText().toString());
-        if (url == null) { setStatus("Wpisz adres strony."); return; }
-        webView.loadUrl(url);
-        setStatus("Ładuję stronę…");
+    private void hideKeyboard() {
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        View f = getCurrentFocus();
+        if (imm != null && f != null) imm.hideSoftInputFromWindow(f.getWindowToken(), 0);
+        if (f != null) f.clearFocus();
     }
 
-    private void extractAndRead() {
-        String url = normalizeUrl(urlInput.getText().toString());
-        if (url == null) { setStatus("Wpisz adres strony."); return; }
-        urlInput.setText(url);
-        setStatus("Ładuję stronę…");
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String u) {
-                applyReaderMode();
-                webView.setWebViewClient(new WebViewClient());
-            }
-        });
-        webView.loadUrl(url);
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+
+    private String clipboardText() {
+        ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cb == null || !cb.hasPrimaryClip()) return "";
+        ClipData clip = cb.getPrimaryClip();
+        if (clip == null || clip.getItemCount() == 0) return "";
+        CharSequence t = clip.getItemAt(0).coerceToText(this);
+        return t == null ? "" : t.toString().trim();
     }
 
-    private void applyReaderMode() {
-        setStatus("Ekstrahuję artykuł…");
-        String js = "(function(){"
-            + "var sel=['article','[role=\"main\"]','main','.article-body','.article-content',"
-            + "'.post-content','.entry-content','.story-body','#article-body','#content-body','.body-copy'];"
-            + "for(var i=0;i<sel.length;i++){"
-            + "  var el=document.querySelector(sel[i]);"
-            + "  if(el){var t=el.innerText.trim();if(t.length>300)return t;}"
-            + "}"
-            + "var best=null,bestScore=0;"
-            + "document.querySelectorAll('div,section').forEach(function(el){"
-            + "  var text=el.innerText.trim();"
-            + "  if(text.length<200)return;"
-            + "  var cls=(el.className+' '+el.id).toLowerCase();"
-            + "  if(/comment|sidebar|nav|footer|header|\\bad\\b|banner|widget|menu|cookie|popup|modal|overlay/.test(cls))return;"
-            + "  var score=text.length/60+el.querySelectorAll('p').length*3;"
-            + "  if(score>bestScore){bestScore=score;best=el;}"
-            + "});"
-            + "return best?best.innerText.trim():document.body.innerText.trim();"
-            + "})()";
-        webView.evaluateJavascript(js, value -> {
-            String text = decodeJson(value);
-            if (text.isEmpty()) {
-                setStatus("Nie znaleziono tekstu. Strona może wymagać logowania.");
-                return;
-            }
-            textInput.setText(text);
-            setStatus("Artykuł gotowy.");
-            speak(text);
-        });
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Intent
-    // ════════════════════════════════════════════════════════════════════════
-
-    private void handleIncomingIntent(Intent intent) {
-        if (intent == null) return;
-        String action = intent.getAction();
-        CharSequence shared = null;
-        if (Intent.ACTION_SEND.equals(action))
-            shared = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
-        else if (Intent.ACTION_PROCESS_TEXT.equals(action))
-            shared = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT);
-        if (shared == null) return;
-        String value = shared.toString().trim();
-        if (looksLikeUrl(value)) {
-            urlInput.setText(value);
-            extractAndRead();
-        } else {
-            textInput.setText(value);
-            setStatus("Wczytano udostępniony tekst.");
-            speak(value);
-        }
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Odtwarzanie
-    // ════════════════════════════════════════════════════════════════════════
-
-    private void handlePlayPause() {
-        if (currentChunks.isEmpty()) speak(textInput.getText().toString());
-        else pauseOrResume();
-    }
-
-    private void goToPrevChunk() {
-        if (currentChunks.isEmpty()) return;
-        currentChunkIndex = Math.max(0, currentChunkIndex - 1);
-        if (readingQueue && !paused) { tts.stop(); speakNextChunk(); }
-        updateProgress();
-    }
-
-    private void goToNextChunk() {
-        if (currentChunks.isEmpty()) return;
-        currentChunkIndex = Math.min(currentChunks.size() - 1, currentChunkIndex + 1);
-        if (readingQueue && !paused) { tts.stop(); speakNextChunk(); }
-        updateProgress();
-    }
-
-    private void jumpToChunk(int index) {
-        currentChunkIndex = index;
-        if (readingQueue && !paused) { tts.stop(); speakNextChunk(); }
-        else if (paused) tts.stop();
-        updateProgress();
-    }
-
-    private void speakFromCursor() {
-        String text = textInput.getText().toString();
-        int start = Math.max(0, textInput.getSelectionStart());
-        if (start >= text.length()) { setStatus("Ustaw kursor w tekście."); return; }
-        speak(text.substring(start));
-    }
-
-    private void speak(String rawText) {
-        String text = normalize(rawText);
-        if (text.isEmpty()) { setStatus("Brak tekstu do czytania."); return; }
-        if (!ttsReady)      { setStatus("TTS nie jest jeszcze gotowy."); return; }
-        stopReading();
-        textInput.setText(text);
-        Locale locale = getSelectedLocale(text);
-        Voice  voice  = getBestVoice(locale);
-        if (voice != null) { tts.setVoice(voice); locale = voice.getLocale(); }
-        else { tts.setLanguage(locale); }
-        applySpeechRate();
-        currentChunks = splitIntoChunks(text);
-        currentChunkIndex = 0;
-        readingQueue = true;
-        paused = false;
-        currentTitle = text.substring(0, Math.min(60, text.length())).replace("\n", " ").trim();
-        updateProgress();
-        speakNextChunk();
-        PlayerService.update(this, currentTitle, getCurrentChunkPreview(), true, currentChunkIndex, currentChunks.size());
-        setStatus("Czytam  •  " + locale.toLanguageTag()
-            + "  •  " + String.format(Locale.US, "%.2fx", speechRate));
-    }
-
-    private void speakNextChunk() {
-        if (!readingQueue || paused || currentChunkIndex >= currentChunks.size()) {
-            if (currentChunkIndex >= currentChunks.size()) {
-                readingQueue = false;
-                setStatus("Koniec.");
-                updatePlayPauseBtn();
-                if (nowPlayingTitle   != null) nowPlayingTitle.setText("Koniec czytania");
-                if (nowPlayingPreview != null) nowPlayingPreview.setText("");
-                PlayerService.hide(this);
-            }
-            return;
-        }
-        applyVoiceAndRate();
-        tts.speak(currentChunks.get(currentChunkIndex),
-            TextToSpeech.QUEUE_FLUSH, null, "c-" + currentChunkIndex);
-        PlayerService.update(this, currentTitle, getCurrentChunkPreview(), true, currentChunkIndex, currentChunks.size());
-    }
-
-    private void applyVoiceAndRate() {
-        if (!ttsReady || tts == null) return;
-        String text = (!currentChunks.isEmpty() && currentChunkIndex < currentChunks.size())
-            ? currentChunks.get(currentChunkIndex)
-            : (textInput != null ? textInput.getText().toString() : "");
-        Locale locale = getSelectedLocale(text);
-        Voice  voice  = getBestVoice(locale);
-        if (voice != null) tts.setVoice(voice);
-        else               tts.setLanguage(locale);
-        tts.setSpeechRate(speechRate);
-    }
-
-    private void applySpeechRate() {
-        if (ttsReady && tts != null) tts.setSpeechRate(speechRate);
-    }
-
-    private void restartCurrentChunkWithNewRate() {
-        if (!ttsReady || !readingQueue || paused || currentChunks.isEmpty()) return;
-        applySpeechRate();
-        tts.stop();
-        speakNextChunk();
-    }
-
-    private void pauseOrResume() {
-        if (paused) {
-            paused = false;
-            readingQueue = true;
-            speakNextChunk();
-            setStatus("Wznowiono.");
-        } else {
-            paused = true;
-            tts.stop();
-            setStatus("Pauza.");
-        }
-        updatePlayPauseBtn();
-        PlayerService.update(this, currentTitle, getCurrentChunkPreview(), !paused, currentChunkIndex, currentChunks.size());
-    }
-
-    private void stopReading() {
-        readingQueue = false;
-        paused = false;
-        currentChunks = new ArrayList<>();
-        currentChunkStarts.clear();
-        currentChunkEnds.clear();
-        currentChunkIndex = 0;
-        if (tts != null) tts.stop();
-        clearChunkHighlight();
-        updateProgress();
-        PlayerService.hide(this);
-    }
-
-    private void updateProgress() {
-        if (progressText == null || progressSeekBar == null) return;
-        if (currentChunks.isEmpty()) {
-            progressText.setText("—");
-            progressSeekBar.setProgress(0);
-            clearChunkHighlight();
-            if (nowPlayingTitle   != null) nowPlayingTitle.setText("Gotowy do czytania");
-            if (nowPlayingPreview != null) nowPlayingPreview.setText("");
-        } else {
-            int total = currentChunks.size();
-            progressText.setText((currentChunkIndex + 1) + " / " + total);
-            int pct = total <= 1 ? 0 : (int)(currentChunkIndex * 100f / (total - 1));
-            progressSeekBar.setProgress(pct);
-            applyCurrentChunkHighlight();
-            if (nowPlayingTitle != null) {
-                nowPlayingTitle.setText(currentTitle.isEmpty() ? "Czyta…" : currentTitle);
-            }
-            if (nowPlayingPreview != null) {
-                nowPlayingPreview.setText(getCurrentChunkPreview());
-            }
-        }
-        updatePlayPauseBtn();
-    }
-
-    private void updatePlayPauseBtn() {
-        if (playPauseButton != null)
-            playPauseButton.setText(readingQueue && !paused ? "⏸" : "▶");
-    }
-
-    private String getCurrentChunkPreview() {
-        if (currentChunks.isEmpty() || currentChunkIndex < 0 || currentChunkIndex >= currentChunks.size())
-            return "";
-        String chunk = currentChunks.get(currentChunkIndex).replace("\n", " ").trim();
-        return chunk.length() <= 90 ? chunk : chunk.substring(0, 90).trim() + "…";
-    }
-
-    private void clearChunkHighlight() {
-        Editable e = textInput != null ? textInput.getText() : null;
-        if (e == null) return;
-        if (currentChunkSpan != null) e.removeSpan(currentChunkSpan);
-        currentChunkSpan = null;
-    }
-
-    private void applyCurrentChunkHighlight() {
-        Editable e = textInput != null ? textInput.getText() : null;
-        if (e == null) return;
-        clearChunkHighlight();
-        if (currentChunkIndex < 0 || currentChunkIndex >= currentChunkStarts.size()) return;
-        int start = Math.max(0, Math.min(currentChunkStarts.get(currentChunkIndex), e.length()));
-        int end   = Math.max(start, Math.min(currentChunkEnds.get(currentChunkIndex), e.length()));
-        if (end <= start) return;
-        int bg = isDarkMode() ? 0xAA7B6CF6 : 0x555B4AE8;
-        currentChunkSpan = new BackgroundColorSpan(bg);
-        e.setSpan(currentChunkSpan, start, end, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-        textInput.setSelection(end);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Głosy i locale
-    // ════════════════════════════════════════════════════════════════════════
-
-    private void loadVoices() {
-        Set<Voice> available = tts.getVoices();
-        allVoices.clear();
-        if (available != null) {
-            List<Voice> sorted = new ArrayList<>(available);
-            sorted.sort(Comparator.comparing(v -> v.getLocale().toLanguageTag() + v.getName()));
-            for (Voice v : sorted) {
-                if (isSupportedLang(v)) allVoices.add(v);
-            }
-        }
-        refreshVoiceSpinner();
-    }
-
-    private void refreshVoiceSpinner() {
-        voices.clear();
-        voiceLabels.clear();
-        voiceLabels.add("Automatycznie");
-        for (Voice v : allVoices) {
-            String lang = v.getLocale().getLanguage();
-            boolean include = "auto".equals(selectedLanguageCode)
-                || ("pl".equals(selectedLanguageCode) && "pl".equalsIgnoreCase(lang))
-                || ("en".equals(selectedLanguageCode) && "en".equalsIgnoreCase(lang));
-            if (include) {
-                voices.add(v);
-                voiceLabels.add(v.getName() + " (" + v.getLocale().toLanguageTag() + ")");
-            }
-        }
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-            android.R.layout.simple_spinner_item, voiceLabels);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        if (voiceSpinner == null) return;
-        voiceSpinner.setAdapter(adapter);
-        voiceSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override
-            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                Voice picked = pos > 0 ? voices.get(pos - 1) : null;
-                String newName = picked != null ? picked.getName() : "";
-                if (newName.equals(selectedVoiceName)) return;
-                selectedVoiceName = newName;
-                if (ttsReady && tts != null) {
-                    if (picked != null) tts.setVoice(picked);
-                    else tts.setLanguage(detectLocale(
-                        textInput != null ? textInput.getText().toString() : ""));
-                    if (!currentChunks.isEmpty()) {
-                        tts.stop();
-                        paused = false;
-                        readingQueue = true;
-                        speakNextChunk();
-                        updatePlayPauseBtn();
-                    }
-                }
-            }
-            @Override public void onNothingSelected(AdapterView<?> p) { selectedVoiceName = ""; }
-        });
-    }
-
-    private boolean isSupportedLang(Voice v) {
-        String lang = v.getLocale().getLanguage();
-        return "pl".equalsIgnoreCase(lang) || "en".equalsIgnoreCase(lang);
-    }
-
-    private Voice getBestVoice(Locale locale) {
-        for (Voice v : voices) if (v.getName().equals(selectedVoiceName)) return v;
-        for (Voice v : voices) if (v.getLocale().toLanguageTag().equalsIgnoreCase(locale.toLanguageTag())) return v;
-        for (Voice v : voices) if (v.getLocale().getLanguage().equalsIgnoreCase(locale.getLanguage())) return v;
-        return null;
-    }
-
-    private Locale getSelectedLocale(String text) {
-        // Konkretny głos wybrany — użyj jego locale zamiast wykrywać
-        if (!selectedVoiceName.isEmpty()) {
-            for (Voice v : voices) {
-                if (v.getName().equals(selectedVoiceName)) return v.getLocale();
-            }
-        }
-        if ("pl".equals(selectedLanguageCode)) return new Locale("pl", "PL");
-        if ("en".equals(selectedLanguageCode)) return Locale.US;
-        return detectLocale(text);
-    }
-
-    private Locale detectLocale(String text) {
-        String sample = " " + text.substring(0, Math.min(6000, text.length())).toLowerCase(Locale.ROOT) + " ";
-        int pl = countMarkers(sample, new String[]{
-            " ze ", " nie ", " jest ", " się ", " na ", " do ", " oraz ", " który ",
-            "ą", "ć", "ę", "ł", "ń", "ó", "ś", "ź", "ż"});
-        int en = countMarkers(sample, new String[]{
-            " the ", " and ", " is ", " are ", " with ", " from ", " that ", " this ", " you ", " for "});
-        return en > pl ? Locale.US : new Locale("pl", "PL");
-    }
-
-    private int countMarkers(String sample, String[] markers) {
-        int score = 0;
-        for (String m : markers) if (sample.contains(m)) score++;
-        return score;
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Przetwarzanie tekstu
-    // ════════════════════════════════════════════════════════════════════════
-
-    private List<String> splitIntoChunks(String text) {
-        List<String> chunks = new ArrayList<>();
-        currentChunkStarts.clear();
-        currentChunkEnds.clear();
-        String[] parts = text.split("(?<=[.!?;:])\\s+");
-        StringBuilder current = new StringBuilder();
-        int currentStart = -1, currentEnd = -1, searchFrom = 0;
-        for (String part : parts) {
-            String t = part.trim();
-            if (t.isEmpty()) continue;
-            int partStart = text.indexOf(t, searchFrom);
-            if (partStart < 0) partStart = searchFrom;
-            int partEnd = Math.min(text.length(), partStart + t.length());
-            searchFrom = partEnd;
-            if (current.length() > 0 && current.length() + t.length() + 1 > MAX_CHUNK) {
-                chunks.add(current.toString());
-                currentChunkStarts.add(currentStart);
-                currentChunkEnds.add(currentEnd);
-                current.setLength(0);
-                currentStart = -1;
-            }
-            if (current.length() == 0) currentStart = partStart;
-            if (current.length() > 0) current.append(' ');
-            current.append(t);
-            currentEnd = partEnd;
-        }
-        if (current.length() > 0) {
-            chunks.add(current.toString());
-            currentChunkStarts.add(currentStart);
-            currentChunkEnds.add(currentEnd);
-        }
-        return chunks;
-    }
-
-    private String normalize(String text) {
-        return text == null ? "" : text.replaceAll("\\s+", " ").trim();
-    }
-
-    private String decodeJson(String value) {
-        if (value == null || value.equals("null")) return "";
-        try {
-            return new JSONObject("{\"v\":" + value + "}").getString("v").trim();
-        } catch (Exception e) {
-            return value.replace("\\n", "\n").replace("\\\"", "\"").trim();
-        }
-    }
-
-    private String normalizeUrl(String raw) {
+    private static String normalizeUrl(String raw) {
         if (raw == null) return null;
         String url = raw.trim();
         if (url.isEmpty()) return null;
@@ -1215,21 +1177,22 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
         return url;
     }
 
-    private boolean looksLikeUrl(String value) {
-        return value.startsWith("http://") || value.startsWith("https://")
-            || Uri.parse(value).getHost() != null;
+    private static boolean looksLikeUrl(String v) { return extractUrl(v) != null && v.length() < 600; }
+
+    /** Wyciąga adres z udostępnionego tekstu (np. „Tytuł https://…”). */
+    private static String extractUrl(String v) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("https?://\\S+").matcher(v);
+        if (m.find()) return m.group();
+        String t = v.trim();
+        if (!t.contains(" ") && t.matches("[\\w.-]+\\.[a-z]{2,}(/\\S*)?")) return "https://" + t;
+        return null;
     }
 
-    private void setStatus(String msg) {
-        if (statusText != null) statusText.setText(msg);
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Sprawdzanie aktualizacji z GitHub
-    // ════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
+    //  Aktualizacje z GitHub
+    // ════════════════════════════════════════════════════════════════════
 
     private void checkForUpdate() {
-        if (GITHUB_OWNER.isEmpty() || GITHUB_REPO.isEmpty()) return;
         new Thread(() -> {
             try {
                 java.net.URL url = new java.net.URL(
@@ -1246,60 +1209,49 @@ public class MainActivity extends Activity implements TextToSpeech.OnInitListene
                     while ((line = r.readLine()) != null) sb.append(line);
                 }
                 conn.disconnect();
-                JSONObject json   = new JSONObject(sb.toString());
-                String latestTag  = json.optString("tag_name", "").replaceAll("[^0-9.]", "");
-                String releaseUrl = json.optString("html_url", "");
-                String currentVer = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                if (!latestTag.isEmpty() && isNewerVersion(latestTag, currentVer)) {
+                JSONObject json = new JSONObject(sb.toString());
+                String latest = json.optString("tag_name", "").replaceAll("[^0-9.]", "");
+                String page = json.optString("html_url", "");
+                String current = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                if (!latest.isEmpty() && isNewer(latest, current)) {
                     runOnUiThread(() -> {
-                        updateButton.setText("↑ Nowa wersja " + latestTag);
+                        updateButton.setText("↑ Wersja " + latest);
                         updateButton.setVisibility(View.VISIBLE);
                         updateButton.setOnClickListener(v ->
-                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl))));
+                            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(page))));
                     });
                 }
             } catch (Exception ignored) {}
         }).start();
     }
 
-    private boolean isNewerVersion(String latest, String current) {
+    private static boolean isNewer(String latest, String current) {
         try {
-            int[] l = parseVer(latest), c = parseVer(current);
-            for (int i = 0; i < Math.min(l.length, c.length); i++) {
-                if (l[i] > c[i]) return true;
-                if (l[i] < c[i]) return false;
+            String[] l = latest.split("\\."), c = current.split("\\.");
+            for (int i = 0; i < Math.max(l.length, c.length); i++) {
+                int a = i < l.length ? Integer.parseInt(l[i]) : 0;
+                int b = i < c.length ? Integer.parseInt(c[i]) : 0;
+                if (a != b) return a > b;
             }
-            return l.length > c.length;
-        } catch (Exception e) { return false; }
+        } catch (Exception ignored) {}
+        return false;
     }
 
-    private int[] parseVer(String v) {
-        String[] parts = v.split("\\.");
-        int[] r = new int[parts.length];
-        for (int i = 0; i < parts.length; i++) r[i] = Integer.parseInt(parts[i]);
-        return r;
-    }
-
-    // ════════════════════════════════════════════════════════════════════════
-    //  Kafelek szybkich ustawień
-    // ════════════════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════════════════════
+    //  Kafelek
+    // ════════════════════════════════════════════════════════════════════
 
     private void requestTile() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            setStatus("Dodaj kafelek ręcznie w edycji panelu.");
+            toast("Dodaj kafelek ręcznie: rozwiń panel → edytuj kafelki → „Czytnik”");
             return;
         }
         StatusBarManager sbm = getSystemService(StatusBarManager.class);
-        if (sbm == null) { setStatus("Nie można otworzyć panelu kafelek."); return; }
-        ComponentName cn   = new ComponentName(this, ReaderTileService.class);
-        Icon          icon = Icon.createWithResource(this, R.drawable.ic_reader_tile);
-        sbm.requestAddTileService(cn, "Czytnik", icon, getMainExecutor(), result -> {
-            if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED)
-                setStatus("Kafelek dodany.");
-            else if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED)
-                setStatus("Kafelek już jest w panelu.");
-            else
-                setStatus("Dodaj kafelek ręcznie w edycji panelu.");
-        });
+        if (sbm == null) return;
+        sbm.requestAddTileService(new ComponentName(this, ReaderTileService.class), "Czytnik",
+            Icon.createWithResource(this, R.drawable.ic_reader_tile), getMainExecutor(), result -> {
+                if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED) toast("Kafelek dodany");
+                else if (result == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED) toast("Kafelek już jest w panelu");
+            });
     }
 }
