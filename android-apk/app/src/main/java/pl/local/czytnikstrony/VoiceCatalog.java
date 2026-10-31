@@ -20,7 +20,6 @@ import java.util.Locale;
 import java.util.Properties;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -332,22 +331,48 @@ public final class VoiceCatalog {
             String error = null;
             File target = dir(app, m.id);
             File tmp = new File(root(app), m.id + ".part");
+            File archive = new File(root(app), m.id + ".tar.bz2.part");
+            android.os.PowerManager.WakeLock wl = null;
             try {
+                // Bez blokady telefon po wygaszeniu ekranu ucina sieć i pobieranie pada.
+                android.os.PowerManager pm = (android.os.PowerManager) app.getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    wl = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "CzytnikStrony:voice-dl");
+                    wl.acquire(30 * 60 * 1000L);
+                }
+                long need = (long) Math.max(m.approxMb, 64) * 1024 * 1024 * 3;
+                if (root(app).getUsableSpace() < need)
+                    throw new IOException("Za mało miejsca na telefonie (potrzeba ~" + (need >> 20) + " MB)");
+
+                // 1) Najpierw cały plik na dysk — z ponawianiem i wznawianiem (Range).
+                downloadFile(m, archive, cancelled);
+                if (cancelled[0]) throw new IOException("Anulowano");
+
+                // 2) Dopiero potem rozpakowanie z pliku (bez sieci w tle).
                 rm(target);
                 rm(tmp);
                 //noinspection ResultOfMethodCallIgnored
                 tmp.mkdirs();
-                fetchAndExtract(m, tmp, cancelled);
+                extract(archive, tmp, cancelled);
                 if (cancelled[0]) throw new IOException("Anulowano");
                 if (!tmp.renameTo(target)) throw new IOException("Nie udało się zapisać głosu");
                 if (modelFile(app, m.id) == null || !new File(target, "tokens.txt").exists())
                     throw new IOException("Niepełne pliki głosu");
                 //noinspection ResultOfMethodCallIgnored
                 new File(target, ".ok").createNewFile();
+                //noinspection ResultOfMethodCallIgnored
+                archive.delete();
             } catch (Throwable e) {
-                error = cancelled[0] ? "Anulowano" : (e.getMessage() != null ? e.getMessage() : e.toString());
+                error = cancelled[0] ? "Anulowano" : describe(e);
                 rm(tmp);
                 rm(target);
+                // Plik archiwum zostaje przy błędzie sieci — kolejna próba wznowi pobieranie.
+                if (cancelled[0] || !(e instanceof IOException) || e instanceof CorruptArchive) {
+                    //noinspection ResultOfMethodCallIgnored
+                    archive.delete();
+                }
+            } finally {
+                if (wl != null && wl.isHeld()) { try { wl.release(); } catch (Throwable ignored) {} }
             }
             final String err = error;
             MAIN.post(() -> {
@@ -356,6 +381,19 @@ public final class VoiceCatalog {
                 for (DownloadListener l : new ArrayList<>(listeners)) l.onDone(m.id, err);
             });
         }, "voice-dl-" + m.id).start();
+    }
+
+    private static final class CorruptArchive extends IOException {
+        CorruptArchive(String msg, Throwable cause) { super(msg, cause); }
+    }
+
+    private static String describe(Throwable e) {
+        String msg = e.getMessage();
+        if (e instanceof java.net.UnknownHostException) return "brak internetu";
+        if (e instanceof java.net.SocketTimeoutException) return "przekroczono czas połączenia — spróbuj ponownie";
+        if (e instanceof OutOfMemoryError) return "za mało pamięci";
+        if (msg == null || msg.isEmpty()) return e.getClass().getSimpleName();
+        return msg;
     }
 
     private static void notifyProgress(String id, long done, long total) {
@@ -368,81 +406,120 @@ public final class VoiceCatalog {
         });
     }
 
-    private static void fetchAndExtract(Model m, File outDir, boolean[] cancelled) throws IOException {
-        HttpURLConnection conn = open(m.url());
-        try {
-            int code = conn.getResponseCode();
-            if (code != 200) throw new IOException("Serwer zwrócił " + code);
-            final long total = conn.getContentLengthLong();
-            final long[] read = {0};
-            final long[] lastNotify = {0};
-
-            InputStream counting = new FilterInputStream(new BufferedInputStream(conn.getInputStream(), 1 << 16)) {
-                @Override public int read() throws IOException {
-                    int b = super.read();
-                    if (b >= 0) tick(1);
-                    return b;
-                }
-                @Override public int read(byte[] buf, int off, int len) throws IOException {
-                    if (cancelled[0]) throw new IOException("Anulowano");
-                    int n = super.read(buf, off, len);
-                    if (n > 0) tick(n);
-                    return n;
-                }
-                private void tick(int n) {
-                    read[0] += n;
-                    long now = System.currentTimeMillis();
-                    if (now - lastNotify[0] > 250) {
-                        lastNotify[0] = now;
-                        notifyProgress(m.id, read[0], total);
-                    }
-                }
-            };
-
-            String canonicalOut = outDir.getCanonicalPath() + File.separator;
-            try (TarArchiveInputStream tar = new TarArchiveInputStream(new BZip2CompressorInputStream(counting))) {
-                TarArchiveEntry e;
-                byte[] buf = new byte[1 << 16];
-                while ((e = tar.getNextTarEntry()) != null) {
-                    if (cancelled[0]) throw new IOException("Anulowano");
-                    String name = e.getName();
-                    // Usuń katalog główny archiwum (np. "vits-piper-pl_PL-gosia-medium/")
-                    int slash = name.indexOf('/');
-                    String rel = slash >= 0 ? name.substring(slash + 1) : name;
-                    if (rel.isEmpty()) continue;
-                    // Pomijamy zbędne pliki (MODEL_CARD, przykłady audio)
-                    if (rel.endsWith(".wav") || rel.endsWith(".mp3")) continue;
-                    File out = new File(outDir, rel);
-                    if (!out.getCanonicalPath().startsWith(canonicalOut)) continue; // ochrona przed ../
-                    if (e.isDirectory()) {
-                        //noinspection ResultOfMethodCallIgnored
-                        out.mkdirs();
-                        continue;
-                    }
-                    if (!e.isFile()) continue;
-                    File parent = out.getParentFile();
-                    //noinspection ResultOfMethodCallIgnored
-                    if (parent != null) parent.mkdirs();
-                    try (OutputStream os = new FileOutputStream(out)) {
-                        int n;
-                        while ((n = tar.read(buf)) > 0) os.write(buf, 0, n);
-                    }
-                }
+    /** Pobiera archiwum do pliku. Do 6 prób, każda wznawia od miejsca przerwania. */
+    private static void downloadFile(Model m, File out, boolean[] cancelled) throws IOException {
+        IOException last = null;
+        long total = -1;
+        for (int attempt = 0; attempt < 6; attempt++) {
+            if (cancelled[0]) throw new IOException("Anulowano");
+            if (attempt > 0) {
+                try { Thread.sleep(Math.min(15000, 1500L * attempt * attempt)); }
+                catch (InterruptedException ie) { throw new IOException("Anulowano"); }
             }
-            notifyProgress(m.id, read[0], total);
-        } finally {
-            conn.disconnect();
+            long have = out.exists() ? out.length() : 0;
+            if (total > 0 && have >= total) return;
+            HttpURLConnection conn = null;
+            try {
+                conn = open(m.url(), have);
+                int code = conn.getResponseCode();
+                boolean append;
+                if (code == 206) {
+                    append = true;
+                    String cr = conn.getHeaderField("Content-Range"); // bytes a-b/total
+                    if (cr != null && cr.contains("/")) {
+                        try { total = Long.parseLong(cr.substring(cr.lastIndexOf('/') + 1).trim()); } catch (NumberFormatException ignored) {}
+                    }
+                } else if (code == 200) {
+                    append = false;      // serwer zignorował Range — od zera
+                    have = 0;
+                    total = conn.getContentLengthLong();
+                } else if (code == 416 && have > 0) {
+                    return;              // mamy już całość
+                } else if (code >= 500 || code == 429 || code == 403) {
+                    last = new IOException("Serwer zwrócił " + code);
+                    continue;
+                } else {
+                    throw new IOException("Serwer zwrócił " + code + " dla " + m.id);
+                }
+
+                long done = have;
+                long lastNotify = 0;
+                try (InputStream in = new BufferedInputStream(conn.getInputStream(), 1 << 16);
+                     OutputStream os = new FileOutputStream(out, append)) {
+                    byte[] buf = new byte[1 << 16];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        if (cancelled[0]) throw new IOException("Anulowano");
+                        os.write(buf, 0, n);
+                        done += n;
+                        long now = System.currentTimeMillis();
+                        if (now - lastNotify > 250) { lastNotify = now; notifyProgress(m.id, done, total); }
+                    }
+                }
+                notifyProgress(m.id, done, total);
+                if (total > 0 && done < total) { last = new IOException("Połączenie przerwane"); continue; }
+                return;
+            } catch (IOException e) {
+                if (cancelled[0]) throw new IOException("Anulowano");
+                last = e;
+            } finally {
+                if (conn != null) conn.disconnect();
+            }
         }
+        throw last != null ? last : new IOException("Nie udało się pobrać");
     }
 
-    private static HttpURLConnection open(String url) throws IOException {
+    private static void extract(File archive, File outDir, boolean[] cancelled) throws IOException {
+        String canonicalOut = outDir.getCanonicalPath() + File.separator;
+        boolean gotModel = false;
+        try (TarArchiveInputStream tar = new TarArchiveInputStream(new BZip2CompressorInputStream(
+                new BufferedInputStream(new FileInputStream(archive), 1 << 16)))) {
+            TarArchiveEntry e;
+            byte[] buf = new byte[1 << 16];
+            while ((e = tar.getNextTarEntry()) != null) {
+                if (cancelled[0]) throw new IOException("Anulowano");
+                String name = e.getName();
+                // Usuń katalog główny archiwum (np. "vits-piper-pl_PL-gosia-medium/")
+                int slash = name.indexOf('/');
+                String rel = slash >= 0 ? name.substring(slash + 1) : name;
+                if (rel.isEmpty()) continue;
+                // Pomijamy zbędne pliki (przykłady audio)
+                if (rel.endsWith(".wav") || rel.endsWith(".mp3")) continue;
+                File out = new File(outDir, rel);
+                if (!out.getCanonicalPath().startsWith(canonicalOut)) continue; // ochrona przed ../
+                if (e.isDirectory()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.mkdirs();
+                    continue;
+                }
+                if (!e.isFile()) continue;
+                File parent = out.getParentFile();
+                //noinspection ResultOfMethodCallIgnored
+                if (parent != null) parent.mkdirs();
+                try (OutputStream os = new FileOutputStream(out)) {
+                    int n;
+                    while ((n = tar.read(buf)) > 0) os.write(buf, 0, n);
+                }
+                if (rel.endsWith(".onnx")) gotModel = true;
+            }
+        } catch (IOException ex) {
+            if (cancelled[0]) throw new IOException("Anulowano");
+            // Uszkodzone archiwum — usuwamy, żeby następna próba pobrała je od nowa.
+            throw new CorruptArchive("Uszkodzony plik głosu (" + describe(ex) + ") — pobierz ponownie", ex);
+        }
+        if (!gotModel) throw new CorruptArchive("W archiwum nie ma modelu — pobierz ponownie", null);
+    }
+
+    private static HttpURLConnection open(String url, long from) throws IOException {
         // Ręczne podążanie za przekierowaniami (GitHub → serwer plików)
         for (int i = 0; i < 6; i++) {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
             c.setInstanceFollowRedirects(false);
-            c.setConnectTimeout(15000);
-            c.setReadTimeout(30000);
+            c.setConnectTimeout(20000);
+            c.setReadTimeout(60000);
             c.setRequestProperty("User-Agent", "CzytnikStrony");
+            c.setRequestProperty("Accept-Encoding", "identity");
+            if (from > 0) c.setRequestProperty("Range", "bytes=" + from + "-");
             int code = c.getResponseCode();
             if (code >= 300 && code < 400) {
                 String loc = c.getHeaderField("Location");
