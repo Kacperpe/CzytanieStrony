@@ -2,7 +2,7 @@
 
 Aplikacja do czytania stron internetowych na głos. Składa się z dwóch części:
 
-- **Android APK** — aplikacja mobilna z czytnikiem TTS i powiadomieniem Spotify-style
+- **Android APK** — czytnik z naturalnymi głosami neuronowymi (Piper, offline), czytaniem w tle i sterowaniem z powiadomienia / słuchawek
 - **Rozszerzenie Chrome** — czytnik stron bezpośrednio w przeglądarce z tłumaczeniem na polski
 
 ---
@@ -29,6 +29,20 @@ adb install app-debug.apk
 ```
 
 ---
+
+## Naturalne głosy (offline)
+
+W aplikacji: **Język i głos → Zmień** → pobierz np. *Gosia*, *Darkman* albo *MC Speech* (~65 MB).
+Głosy to modele Piper uruchamiane przez [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — działają na telefonie bez internetu.
+
+**Własny głos:** wytrenuj/dotrenuj model Piper na komputerze i zaimportuj pliki `.onnx` + `.onnx.json`
+(„Importuj własny głos” w oknie wyboru głosu). Wymaga wcześniej pobranego dowolnego głosu z listy (pliki wymowy espeak-ng).
+
+## Nowa wersja APK
+
+Każdy push buduje APK w GitHub Actions (zakładka *Actions* → artefakt `CzytanieStrony-apk`).
+Opublikowanie release'u (np. tag `v0.2.0`) automatycznie dołącza `CzytanieStrony.apk`.
+APK jest podpisany stałym kluczem z `android-apk/app/debug.keystore`, więc kolejne wersje instalują się na wierzch.
 
 ## Jak zbudować APK samodzielnie
 

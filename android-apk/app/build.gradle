@@ -1,5 +1,7 @@
 plugins {
     id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    id "org.jetbrains.kotlin.plugin.compose"
 }
 
 android {
@@ -10,7 +12,71 @@ android {
         applicationId "pl.local.czytnikstrony"
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 112
+        versionName "1.1.2"
+
+        ndk {
+            // Telefony: 64- i 32-bit ARM (bez x86 → mniejszy APK)
+            abiFilters "arm64-v8a", "armeabi-v7a"
+        }
     }
+
+    signingConfigs {
+        // Stały klucz debug w repo — APK z GitHuba i z Android Studio
+        // mają ten sam podpis, więc aktualizacje instalują się „na wierzch”.
+        shared {
+            storeFile file("debug.keystore")
+            storePassword "android"
+            keyAlias "androiddebugkey"
+            keyPassword "android"
+        }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.shared
+        }
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.shared
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        compose true
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+}
+
+dependencies {
+    // Silnik neuronowego TTS (Piper/VITS) — https://github.com/k2-fsa/sherpa-onnx
+    // 1.13.x zawiera jeszcze espeak-ng potrzebny głosom Piper.
+    implementation "com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.8"
+    // AAR sherpa-onnx jest w Kotlinie — potrzebna biblioteka standardowa.
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.1.21"
+    // UI: Jetpack Compose + Material 3
+    implementation platform("androidx.compose:compose-bom:2025.06.00")
+    implementation "androidx.compose.material3:material3"
+    implementation "androidx.compose.material:material-icons-extended"
+    implementation "androidx.compose.ui:ui"
+    implementation "androidx.compose.animation:animation"
+    implementation "androidx.activity:activity-compose:1.10.1"
+    debugImplementation "androidx.compose.ui:ui-tooling"
+
+    // Rozpakowywanie paczek głosów (.tar.bz2)
+    implementation "org.apache.commons:commons-compress:1.20"
 }
