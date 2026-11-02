@@ -91,6 +91,22 @@ fun VoicesScreen(state: AppState) {
                 }
             }
             Spacer(Modifier.height(20.dp))
+            Text("Tłumaczenie stron (offline)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            val tModes = listOf("off" to "Wyłączone", "pl" to "Na polski", "en" to "Na angielski")
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                tModes.forEachIndexed { i, (k, label) ->
+                    SegmentedButton(
+                        selected = r.translateMode == k,
+                        onClick = { r.setTranslateMode(k) },
+                        shape = SegmentedButtonDefaults.itemShape(i, tModes.size)
+                    ) { Text(label, maxLines = 1) }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text("Czytanie startuje po pierwszym akapicie, reszta tłumaczy się w tle. Przy pierwszym użyciu pobierany jest model (~30 MB).",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(20.dp))
             Text("Głos dla języka", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             val langs = listOf("pl" to "Polski", "en" to "Angielski")

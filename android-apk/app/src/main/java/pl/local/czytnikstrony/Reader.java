@@ -67,6 +67,13 @@ public final class Reader {
     private String articleId = null;
     private int version = 0;
 
+    // ── Tłumaczenie (ML Kit, offline) ────────────────────────────────────
+    private final PageTranslator translator = new PageTranslator();
+    private boolean translating = false;       // w tle tłumaczą się kolejne akapity
+    private boolean waitingForTranslation = false; // przeczytano wszystko, co gotowe — czekamy
+    private boolean autoStartTranslated = false;   // zacznij czytać po pierwszym akapicie
+    private int engineEnd = 0;                  // ile fragmentów dostał silnik w bieżącej sesji
+
     // ── Timer snu ────────────────────────────────────────────────────────
     private long sleepAt = 0;              // 0 = wyłączony
     private boolean sleepEndOfArticle = false;
@@ -206,6 +213,15 @@ public final class Reader {
     float getRate()         { return rate; }
     String getLangMode()    { return langMode; }
     String getActiveLang()  { return activeLang; }
+    boolean isTranslating() { return translating; }
+
+    /** "off", "pl" albo "en" — na jaki język tłumaczyć wczytywane teksty. */
+    String getTranslateMode() { return prefs.getString("translate", "off"); }
+
+    void setTranslateMode(String mode) {
+        prefs.edit().putString("translate", mode).apply();
+        notifyState();
+    }
 
     int chunkStart(int i) { return i >= 0 && i < starts.size() ? starts.get(i) : -1; }
     int chunkEnd(int i)   { return i >= 0 && i < ends.size() ? ends.get(i) : -1; }
@@ -294,6 +310,11 @@ public final class Reader {
         String clean = cleanText(rawText);
         if (clean.isEmpty()) { setStatus("Brak tekstu do czytania."); return; }
         Library.Article a = Library.get(app).upsert(newTitle, newUrl, clean, false);
+        String target = getTranslateMode();
+        if (("pl".equals(target) || "en".equals(target)) && startOffset <= 0) {
+            playTranslated(a.id, clean, newTitle, newUrl, target);
+            return;
+        }
         load(a.id, clean, newTitle, newUrl);
         index = indexForOffset(startOffset);
         Library.get(app).markReading(a.id, chunks.size());
@@ -321,6 +342,7 @@ public final class Reader {
     }
 
     private void load(String id, String clean, String newTitle, String newUrl) {
+        cancelTranslation();
         stopEngine();
         previewMode = false;
         articleId = id;
@@ -339,6 +361,18 @@ public final class Reader {
     }
 
     void pause() {
+        if (playing && waitingForTranslation) {
+            // silnik skończył gotową część — „pauza” = zatrzymaj się w tym miejscu
+            waitingForTranslation = false;
+            playing = false;
+            paused = false;
+            loading = false;
+            index = Math.max(0, Math.min(engineEnd, chunks.size() - 1));
+            releaseWakeLock();
+            setStatus("Pauza");
+            persistIndex();
+            return;
+        }
         if (!playing || activeEngine == null) return;
         activeEngine.pause();
         playing = false;
@@ -355,13 +389,15 @@ public final class Reader {
         playing = true;
         acquireWakeLock();
         if (activeEngine.canResumeInPlace()) activeEngine.resume();
-        else activeEngine.start(chunks, index, rate, engineListener());
+        else { engineEnd = chunks.size(); activeEngine.start(chunks, index, rate, engineListener()); }
         setStatus(statusReading());
         ensureService();
     }
 
     void stop() {
         stopEngine();
+        waitingForTranslation = false;
+        autoStartTranslated = false;
         playing = false;
         paused = false;
         loading = false;
@@ -439,9 +475,11 @@ public final class Reader {
         playing = true;
         paused = false;
         loading = true;
+        waitingForTranslation = false;
         acquireWakeLock();
         ensureService();
         setStatus(statusReading());
+        engineEnd = chunks.size();
         activeEngine.start(chunks, index, rate, engineListener());
     }
 
@@ -457,28 +495,20 @@ public final class Reader {
             }
             @Override public void onFinished() {
                 if (engine != activeEngine) return;
-                playing = false;
-                paused = false;
-                loading = false;
-                activeEngine = null;
-                if (articleId != null) Library.get(app).markFinished(articleId);
-                index = 0;
-                persistIndex();
-                if (sleepEndOfArticle) {
-                    sleepEndOfArticle = false;
-                    abandonFocus();
-                    releaseWakeLock();
-                    setStatus("Timer snu — koniec artykułu");
+                // Tłumaczenie dopisało akapity, których ten silnik jeszcze nie dostał
+                if (engineEnd < chunks.size()) {
+                    activeEngine = null;
+                    startAt(engineEnd, activeLang);
                     return;
                 }
-                Library.Article next = Library.get(app).nextQueued();
-                if (next != null && playArticle(next.id)) {
-                    setStatus("Następny z kolejki");
+                if (translating) {
+                    activeEngine = null;
+                    waitingForTranslation = true;
+                    loading = true;
+                    setStatus("Tłumaczę dalej…");
                     return;
                 }
-                abandonFocus();
-                releaseWakeLock();
-                setStatus("Koniec czytania");
+                finishReading();
             }
             @Override public void onError(String m) {
                 if (engine != activeEngine) return;
@@ -497,9 +527,36 @@ public final class Reader {
         };
     }
 
+    /** Koniec artykułu: biblioteka, timer snu, kolejka. */
+    private void finishReading() {
+        playing = false;
+        paused = false;
+        loading = false;
+        activeEngine = null;
+        if (articleId != null) Library.get(app).markFinished(articleId);
+        index = 0;
+        persistIndex();
+        if (sleepEndOfArticle) {
+            sleepEndOfArticle = false;
+            abandonFocus();
+            releaseWakeLock();
+            setStatus("Timer snu — koniec artykułu");
+            return;
+        }
+        Library.Article next = Library.get(app).nextQueued();
+        if (next != null && playArticle(next.id)) {
+            setStatus("Następny z kolejki");
+            return;
+        }
+        abandonFocus();
+        releaseWakeLock();
+        setStatus("Koniec czytania");
+    }
+
     private String statusReading() {
         String lang = "pl".equals(activeLang) ? "PL" : "EN";
-        return "Czytam · " + lang + " · " + String.format(Locale.US, "%.2fx", rate);
+        return "Czytam · " + lang + " · " + String.format(Locale.US, "%.2fx", rate)
+            + (translating ? " · tłumaczę dalej" : "");
     }
 
     private SpeechEngine engineFor(String spec, String lang) {
@@ -528,6 +585,108 @@ public final class Reader {
         } catch (Exception ignored) {
             // np. start z tła na Androidzie 12+ — powiadomienie pojawi się przy następnej akcji z UI
         }
+    }
+
+    // ── Tłumaczenie ──────────────────────────────────────────────────────
+
+    /**
+     * Tłumaczy tekst akapit po akapicie i zaczyna czytać od razu po pierwszym.
+     * Kolejne akapity są dopisywane w tle; gdy czytanie dogoni tłumaczenie,
+     * czeka na następny akapit.
+     */
+    private void playTranslated(String id, String clean, String newTitle, String newUrl, String target) {
+        load(id, "", newTitle, newUrl);
+        final String original = clean;
+        activeLang = target;
+        index = 0;
+        translating = true;
+        autoStartTranslated = true;
+        loading = true;
+        notifyState();
+        translator.start(original, target, new PageTranslator.Callback() {
+            @Override public void onSkip(String reason) {
+                translating = false;
+                loading = false;
+                // już w docelowym języku — czytaj oryginał bez zmian
+                text = original;
+                rebuildChunks(resolveLang(text));
+                index = 0;
+                persistText();
+                Library.get(app).markReading(id, chunks.size());
+                if (autoStartTranslated) { autoStartTranslated = false; startAt(0, activeLang); }
+                else notifyState();
+            }
+            @Override public void onParagraph(String translated) {
+                onTranslatedParagraph(id, translated);
+            }
+            @Override public void onDone() {
+                translating = false;
+                saveTranslated(id);
+                if (waitingForTranslation) { waitingForTranslation = false; loading = false; finishReading(); }
+                else if (playing) setStatus(statusReading());
+                else notifyState();
+            }
+            @Override public void onError(String message, List<String> rest) {
+                // to, czego nie udało się przetłumaczyć, czytamy w oryginale
+                for (String p : rest) appendParagraph(p);
+                translating = false;
+                saveTranslated(id);
+                if (autoStartTranslated && hasContent()) {
+                    autoStartTranslated = false;
+                    Library.get(app).markReading(id, chunks.size());
+                    startAt(0, activeLang);
+                } else if (waitingForTranslation) {
+                    startAt(engineEnd, activeLang);
+                }
+                if (!hasContent()) loading = false;
+                setStatus(message);
+            }
+            @Override public void onStatus(String message) {
+                if (!playing) setStatus(message);
+            }
+        });
+    }
+
+    private void onTranslatedParagraph(String id, String translated) {
+        boolean first = chunks.isEmpty();
+        appendParagraph(translated);
+        if (chunks.isEmpty()) return;
+        if (first && autoStartTranslated) {
+            autoStartTranslated = false;
+            persistText();
+            Library.get(app).markReading(id, chunks.size());
+            startAt(0, activeLang);
+        } else if (waitingForTranslation) {
+            startAt(engineEnd, activeLang);
+        } else {
+            notifyState();
+        }
+    }
+
+    private void saveTranslated(String id) {
+        if (text.isEmpty() || !id.equals(articleId)) return;
+        Library.get(app).setText(id, text);
+        persistText();
+    }
+
+    private void cancelTranslation() {
+        translator.cancel();
+        translating = false;
+        waitingForTranslation = false;
+        autoStartTranslated = false;
+    }
+
+    /** Dopisuje akapit na końcu tekstu i dzieli tylko jego (stare fragmenty się nie zmieniają). */
+    private void appendParagraph(String para) {
+        para = para == null ? "" : para.replace('\n', ' ').trim();
+        if (para.isEmpty()) return;
+        int from = text.isEmpty() ? 0 : text.length() + 2;
+        text = text.isEmpty() ? para : text + "\n\n" + para;
+        // nowa lista — silnik czyta swoją kopię, więc dopisywanie jest bezpieczne
+        List<String> out = new ArrayList<>(chunks);
+        Locale loc = "en".equals(activeLang) ? Locale.US : new Locale("pl", "PL");
+        splitParagraph(from, text.length(), BreakIterator.getSentenceInstance(loc), out);
+        chunks = out;
     }
 
     // ── Język ────────────────────────────────────────────────────────────
@@ -657,6 +816,7 @@ public final class Reader {
 
     /** Czyści zapamiętany tekst (przycisk „Wyczyść”). */
     void clear() {
+        cancelTranslation();
         stop();
         text = "";
         title = "";

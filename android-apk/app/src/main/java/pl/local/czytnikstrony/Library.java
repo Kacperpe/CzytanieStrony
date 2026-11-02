@@ -158,6 +158,15 @@ public final class Library {
         return a;
     }
 
+    /** Podmienia treść artykułu (np. po przetłumaczeniu). */
+    void setText(String id, String text) {
+        Article a = get(id);
+        if (a == null || text == null) return;
+        a.chars = text.length();
+        writeText(id, text);
+        changed();
+    }
+
     void markReading(String id, int count) {
         Article a = get(id);
         if (a == null) return;
